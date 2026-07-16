@@ -1,4 +1,7 @@
 import { createWorker, PSM, type Worker } from 'tesseract.js'
+import { TimeoutError, withTimeout } from '../utils/withTimeout'
+
+const OCR_TIMEOUT_MS = 60_000
 
 export interface OcrProgress {
   status: string
@@ -88,19 +91,50 @@ export async function reconocerTexto(
   image: Blob | HTMLCanvasElement,
   onProgress?: OcrProgressListener,
 ): Promise<string> {
+  const inicio = performance.now()
   console.log('[ocr] iniciando reconocimiento de texto...')
   const worker = await getWorker()
 
   listenerActual = onProgress ?? null
   try {
-    const { data } = await worker.recognize(image)
-    console.log(`[ocr] texto reconocido (${data.text.length} caracteres, confianza ${data.confidence})`)
+    // A diferencia del preprocesamiento, acá NO hay fallback razonable si se
+    // agota el tiempo: sin texto no hay nada que parsear. El timeout existe
+    // para que el pipeline falle con un mensaje claro en vez de quedarse
+    // esperando para siempre a un worker que se colgó (foto corrupta, bug en
+    // el WASM de Tesseract, etc.) — Capture.tsx atrapa este error y pone el
+    // recibo en estado 'error' con el mensaje visible.
+    const { data } = await withTimeout(
+      worker.recognize(image),
+      OCR_TIMEOUT_MS,
+      `El OCR no terminó en ${OCR_TIMEOUT_MS / 1000}s`,
+    )
+    console.log(
+      `[ocr] texto reconocido en ${Math.round(performance.now() - inicio)}ms ` +
+        `(${data.text.length} caracteres, confianza ${data.confidence})`,
+    )
     return data.text
   } catch (error) {
     // Nunca tragarse el error: se relanza tal cual para que Capture.tsx lo
     // muestre en la UI, pero se deja un rastro claro en consola con el
     // contexto de en qué etapa pasó.
-    console.error('[ocr] recognize() falló', error)
+    console.error(`[ocr] recognize() falló tras ${Math.round(performance.now() - inicio)}ms`, error)
+
+    if (error instanceof TimeoutError) {
+      // withTimeout() no cancela el job real: el worker sigue "ocupado" con
+      // el recognize() que nunca contestó. Si se dejara el mismo worker para
+      // la próxima foto, lo más probable es que esa también se cuelgue (y la
+      // siguiente, y la siguiente...). Se descarta el worker atascado acá
+      // para que la próxima llamada a reconocerTexto() cree uno nuevo desde
+      // cero en vez de heredar el bloqueo.
+      console.warn('[ocr] worker probablemente atascado tras el timeout, descartándolo para la próxima foto')
+      workerPromise = null
+      void worker.terminate().catch(() => {
+        // Si terminate() también cuelga o falla, no hay mucho más que hacer
+        // acá — igual ya se soltó la referencia (workerPromise = null) para
+        // que la próxima captura arranque un worker nuevo.
+      })
+    }
+
     throw error
   } finally {
     listenerActual = null

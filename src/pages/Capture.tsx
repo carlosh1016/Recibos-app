@@ -10,6 +10,20 @@ import { reconcile } from '../parser/reconcile'
 // original) mientras algo corre en segundo plano.
 type Estado = 'idle' | 'preprocesando' | 'ocr' | 'parseando' | 'listo' | 'error'
 
+// Rangos de la barra global (0-100), uno por etapa. `preprocesando` cubre
+// TANTO la carga de opencv.js como el pipeline en sí (ver el onProgress de
+// preprocess(), que reporta 0/0.5/1 dentro de este mismo tramo) porque no
+// hay forma de medir por separado cuánto tarda cada sub-paso sin inventar
+// números — 0-30% completo se siente como "cargando/mejorando la imagen"
+// para quien mira la barra, que es lo que importa acá.
+const RANGO_PREPROCESO: [number, number] = [0, 30]
+const RANGO_OCR: [number, number] = [30, 90]
+const RANGO_PARSEO: [number, number] = [90, 100]
+
+function mapearProgreso(fraccion: number, [desde, hasta]: [number, number]): number {
+  return desde + fraccion * (hasta - desde)
+}
+
 /**
  * Decodifica el archivo de la foto en un <img> ya listo para usar. `decode()`
  * confirma que el bitmap terminó de decodificarse antes de seguir — sin esto,
@@ -46,7 +60,7 @@ export function Capture() {
   const navigate = useNavigate()
 
   const [estado, setEstado] = useState<Estado>('idle')
-  const [progresoOcr, setProgresoOcr] = useState(0)
+  const [progresoGlobal, setProgresoGlobal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [recibosCapturados, setRecibosCapturados] = useState(0)
 
@@ -67,25 +81,36 @@ export function Capture() {
     if (!file || !sessionId) return
 
     setError(null)
-    setProgresoOcr(0)
+    setProgresoGlobal(0)
+    const inicioTotal = performance.now()
 
     try {
       console.log('[capture] foto seleccionada:', file.name, file.size, 'bytes', file.type)
 
       setEstado('preprocesando')
       const imagen = await cargarImagenDesdeArchivo(file)
-      const canvasPreprocesado = await preprocess(imagen)
-      console.log('[capture] preprocesamiento terminado')
+
+      const tPreproceso = performance.now()
+      const canvasPreprocesado = await preprocess(imagen, (fraccion) => {
+        setProgresoGlobal(mapearProgreso(fraccion, RANGO_PREPROCESO))
+      })
+      console.log(`[capture] preprocesamiento terminado en ${Math.round(performance.now() - tPreproceso)}ms`)
 
       setEstado('ocr')
+      const tOcr = performance.now()
       const rawOCRText = await reconocerTexto(canvasPreprocesado, ({ progress }) => {
-        setProgresoOcr(progress)
+        setProgresoGlobal(mapearProgreso(progress, RANGO_OCR))
       })
-      console.log('[capture] OCR terminado, primeros 200 caracteres:', rawOCRText.slice(0, 200))
+      console.log(
+        `[capture] OCR terminado en ${Math.round(performance.now() - tOcr)}ms, ` +
+          `primeros 200 caracteres: ${rawOCRText.slice(0, 200)}`,
+      )
 
       setEstado('parseando')
+      setProgresoGlobal(mapearProgreso(0, RANGO_PARSEO))
+      const tParseo = performance.now()
       const { data, status } = reconcile(rawOCRText)
-      console.log('[capture] parser terminado:', { data, status })
+      console.log(`[capture] parser terminado en ${Math.round(performance.now() - tParseo)}ms:`, { data, status })
 
       await db.receipts.add({
         sessionId: Number(sessionId),
@@ -96,13 +121,17 @@ export function Capture() {
         createdAt: new Date(),
       })
       console.log('[capture] recibo guardado en Dexie')
+      console.log(`[capture] pipeline completo en ${Math.round(performance.now() - inicioTotal)}ms`)
 
+      setProgresoGlobal(100)
       setEstado('listo')
       setRecibosCapturados((n) => n + 1)
     } catch (err) {
       // Nunca fallar en silencio: se loguea el detalle técnico en consola y
-      // se muestra un mensaje en la UI.
-      console.error('[capture] error procesando el recibo:', err)
+      // se muestra un mensaje en la UI. La barra se queda en el punto donde
+      // iba (no se resetea a 0) para que se note en qué etapa se rompió, y
+      // el color cambia a rojo vía el estado 'error'.
+      console.error(`[capture] error tras ${Math.round(performance.now() - inicioTotal)}ms procesando el recibo:`, err)
       setEstado('error')
       setError(err instanceof Error ? err.message : 'Error desconocido procesando la foto')
     }
@@ -112,7 +141,7 @@ export function Capture() {
 
   const mensajeEstado: Record<Estado, string> = {
     idle: 'Listo para tomar una foto.',
-    preprocesando: 'Mejorando la imagen...',
+    preprocesando: 'Cargando OpenCV y mejorando la imagen...',
     ocr: 'Reconociendo texto (OCR)...',
     parseando: 'Extrayendo los datos de la factura...',
     listo: '¡Recibo guardado! Puedes tomar otra foto.',
@@ -152,14 +181,16 @@ export function Capture() {
         }`}
       >
         <p>{mensajeEstado[estado]}</p>
-        {estado === 'ocr' && (
+
+        {(procesando || estado === 'error') && (
           <div className="mt-2 h-2 w-full rounded bg-gray-200">
             <div
-              className="h-2 rounded bg-brand-600 transition-all"
-              style={{ width: `${Math.round(progresoOcr * 100)}%` }}
+              className={`h-2 rounded transition-all ${estado === 'error' ? 'bg-red-500' : 'bg-brand-600'}`}
+              style={{ width: `${Math.round(progresoGlobal)}%` }}
             />
           </div>
         )}
+
         {estado === 'error' && error && <p className="mt-1 font-mono text-xs">{error}</p>}
       </div>
 

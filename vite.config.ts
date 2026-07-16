@@ -13,6 +13,19 @@ export default defineConfig({
       // interceptar a mano, todo el procesamiento ya es local.
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
+      // Sin esto, `npm run dev` no genera manifest ni service worker en
+      // absoluto (vite-plugin-pwa solo actúa en build por defecto). Si se
+      // prueba la instalabilidad de la PWA en el celular apuntando al
+      // servidor de dev (`vite --host`), el navegador no encuentra ningún
+      // manifest real — y si además hay un service worker de una build
+      // anterior ya instalado en ese mismo origen, ese SW viejo puede seguir
+      // interceptando requests y sirviendo respuestas obsoletas. Con
+      // devOptions.enabled, dev también sirve un manifest real para poder
+      // probar "Agregar a pantalla de inicio" sin tener que hacer build cada vez.
+      devOptions: {
+        enabled: true,
+        type: 'module',
+      },
       manifest: {
         name: 'Recibos App',
         short_name: 'Recibos',
@@ -48,7 +61,12 @@ export default defineConfig({
         // globPatterns como el resto del build alcanza — no hace falta una
         // regla de runtimeCaching aparte apuntando a un origen externo, y el
         // OCR funciona offline incluso en el primer uso tras instalar la PWA.
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,xlsx,wasm,gz}'],
+        // 'webmanifest' estaba faltando acá: sin él, manifest.webmanifest no
+        // quedaba en el precache explícito de globPatterns (aunque
+        // vite-plugin-pwa igual lo escribe a dist/, y funciona bien servido
+        // en caliente vía `vite preview` — pero es más seguro que también
+        // esté precacheado como el resto de los assets estáticos).
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,xlsx,wasm,gz,webmanifest}'],
         // El chunk de opencv.js pesa ~13MB (es su runtime WASM) y los core de
         // tesseract.js ~2.8-3.9MB cada uno; el default de workbox (2MB) los
         // dejaría fuera del precache. 20MB da margen sin ser el límite real.
