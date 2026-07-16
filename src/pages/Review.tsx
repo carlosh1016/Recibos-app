@@ -22,8 +22,9 @@ export function Review() {
    *   acordarse de revocar el object URL al desmontar para no filtrar memoria)
    *   al lado de un formulario con cada campo de `receipt.data` editable.
    * - Resaltar visualmente (ej. borde/fondo rojo) los campos valorBase, iva y
-   *   total cuando `reconciliaValores(receipt.data)` (parser/reconciliacion.ts)
-   *   da false, para que el usuario corrija a mano el campo que está mal leído.
+   *   total cuando `receipt.status === 'error'` (ya lo decide `reconcile()`
+   *   en parser/reconcile.ts al capturar), para que el usuario corrija a
+   *   mano el campo que está mal leído.
    * - Al editar un campo, actualizar tanto el estado local como
    *   `db.receipts.update(receipt.id, { data: nuevoData, status: 'reviewed' })`.
    * - Un recibo con `status === 'error'` debería quedar visualmente marcado en

@@ -41,26 +41,18 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // tesseract.js descarga sus archivos de traineddata (spa) la primera vez desde
-        // un CDN; se cachean aquí con una estrategia "cache first" para que, una vez
-        // descargados, el OCR funcione sin red. La primera ejecución SÍ requiere
-        // internet para bajar el modelo de idioma.
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }: { url: URL }) =>
-              url.origin.includes('tessdata') || url.pathname.endsWith('.traineddata.gz'),
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'tesseract-lang-data',
-              expiration: { maxEntries: 5, maxAgeSeconds: 60 * 60 * 24 * 365 },
-              cacheableResponse: { statuses: [0, 200] },
-            },
-          },
-        ],
-        // La plantilla de Excel y el resto de assets estáticos ya quedan precacheados
-        // por defecto vía globPatterns (dist/**/*.{js,css,html,png,svg,xlsx,...}).
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,xlsx}'],
-        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+        // Todos los assets de OCR/visión (worker de tesseract.js, los .wasm
+        // del core, el traineddata de 'spa', y el chunk de opencv.js) están
+        // self-hosteados en public/ (ver scripts/setup-ocr-assets.mjs) en vez
+        // de cargarse de un CDN externo. Con eso, precachearlos por
+        // globPatterns como el resto del build alcanza — no hace falta una
+        // regla de runtimeCaching aparte apuntando a un origen externo, y el
+        // OCR funciona offline incluso en el primer uso tras instalar la PWA.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,xlsx,wasm,gz}'],
+        // El chunk de opencv.js pesa ~13MB (es su runtime WASM) y los core de
+        // tesseract.js ~2.8-3.9MB cada uno; el default de workbox (2MB) los
+        // dejaría fuera del precache. 20MB da margen sin ser el límite real.
+        maximumFileSizeToCacheInBytes: 20 * 1024 * 1024,
       },
     }),
   ],

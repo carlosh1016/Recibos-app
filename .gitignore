@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Assets de OCR (~22MB): se regeneran con `npm run setup:ocr`, ver
+# scripts/setup-ocr-assets.mjs. No se versionan porque son binarios grandes
+# reproducibles desde node_modules + una descarga, no código.
+public/tesseract/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
