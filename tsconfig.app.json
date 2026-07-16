@@ -1,0 +1,72 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // ---------------------------------------------------------------------
+    // Modo estricto. Viniendo de backend, esto es lo más parecido a activar
+    // todos los "warnings como error" del compilador de una vez. `strict: true`
+    // es un atajo que prende TODAS las siguientes banderas (se listan aparte
+    // solo para poder comentar por qué importan en ESTE proyecto en concreto):
+    //
+    // - strictNullChecks: la más importante para esta app. Sin ella, TS trata
+    //   `undefined`/`null` como asignables a cualquier tipo (similar a como un
+    //   `Optional` mal usado en Java a veces se ignora). Con ella, un campo
+    //   como `ExtractedData.valorBase?: number` es en realidad
+    //   `number | undefined`, y el compilador te OBLIGA a comprobar que existe
+    //   antes de sumarlo o formatearlo. Esto es exactamente lo que queremos:
+    //   el OCR puede no leer un campo, y el compilador no te deja "olvidarte"
+    //   de ese caso en la UI de Review ni en el exportador de Excel.
+    //
+    // - noImplicitAny: si TS no puede inferir el tipo de algo (un parámetro de
+    //   función, por ejemplo) y no se lo diste explícito, es error en vez de
+    //   caer silenciosamente en `any` (que en la práctica apaga el chequeo de
+    //   tipos para esa variable). Te fuerza a tipar los datos que entran del
+    //   OCR/parser en el borde del sistema, en vez de dejarlos "sueltos".
+    //
+    // - strictFunctionTypes / strictBindCallApply: hacen que los tipos de los
+    //   parámetros de funciones (callbacks de tesseract.js, handlers de React,
+    //   etc.) se comparen de forma correcta y segura, no de forma laxa.
+    //
+    // - strictPropertyInitialization: en una `class` (como `RecibosDB` en
+    //   db/db.ts), obliga a que cada propiedad quede inicializada en el
+    //   constructor o tenga un tipo que admita `undefined`. Por eso ahí se usa
+    //   `sessions!: EntityTable<...>` — el `!` es una promesa explícita al
+    //   compilador de "esto lo inicializa Dexie, confía en mí", en vez de
+    //   desactivar la regla globalmente.
+    //
+    // - noImplicitThis / alwaysStrict / useUnknownInCatchVariables: menos
+    //   relevantes día a día, pero coherentes con "no dejar nada implícito".
+    //   useUnknownInCatchVariables en particular tipa los `catch (e)` como
+    //   `unknown` en vez de `any`, obligando a comprobar el tipo del error
+    //   antes de leer `e.message` (útil porque tesseract.js y exceljs pueden
+    //   lanzar errores que no son instancias de `Error`).
+    "strict": true
+
+    // Nota: NO se activó `noUncheckedIndexedAccess` (que añadiría `| undefined`
+    // a todo acceso `array[i]` u objeto indexado) para no sumar ruido extra a
+    // un primer proyecto en TS; los campos que realmente pueden faltar ya están
+    // modelados como opcionales explícitos en types/, que es el caso que más
+    // importa aquí.
+  },
+  "include": ["src"]
+}
