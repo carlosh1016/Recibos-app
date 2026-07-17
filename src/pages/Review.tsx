@@ -230,6 +230,17 @@ export function Review() {
     }
   }
 
+  async function descartarRecibo() {
+    if (!receiptActual?.id) return
+    if (!window.confirm('¿Descartar este recibo? Esta acción no se puede deshacer.')) return
+    const id = receiptActual.id
+    await db.receipts.delete(id)
+    const restantes = receipts.filter((r) => r.id !== id)
+    setReceipts(restantes)
+    // Mantener el índice dentro de rango tras quitar el recibo actual.
+    setIdx((i) => Math.max(0, Math.min(i, restantes.length - 1)))
+  }
+
   const pendientes = receipts.filter((r) => r.status !== 'ok').length
 
   if (receipts.length === 0) {
@@ -363,6 +374,15 @@ export function Review() {
                 className="rounded border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Siguiente
+              </button>
+              <button
+                type="button"
+                onClick={() => void descartarRecibo()}
+                disabled={guardando}
+                title="Descartar este recibo"
+                className="rounded border border-red-300 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                Descartar
               </button>
             </div>
 

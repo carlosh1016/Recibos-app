@@ -153,14 +153,37 @@ export function Capture() {
       <h1 className="text-xl font-semibold text-brand-700">Capturar recibos</h1>
       <p className="mt-1 text-sm text-gray-600">Sesión #{sessionId}</p>
 
-      <label
-        className={`mt-6 block rounded border-2 border-dashed p-8 text-center text-sm ${
-          procesando ? 'cursor-not-allowed border-gray-200 text-gray-300' : 'cursor-pointer border-gray-300 text-gray-500'
-        }`}
-      >
-        {procesando ? 'Procesando...' : 'Tomar foto'}
-        {/* capture="environment" abre directo la cámara trasera en móvil, sin
-            pasar por la galería. En desktop abre el selector de archivos normal. */}
+      {/* Recuadro guía: la tirilla real mide ~477px de ancho pero las fotos de
+          prueba salen con el teclado ocupando media imagen, lo que degrada el
+          OCR. El recuadro (proporción angosta y alta, tipo tirilla) le indica
+          al usuario que encuadre SOLO la factura. capture="environment" abre la
+          cámara trasera en móvil; el overlay no se ve sobre el visor nativo,
+          pero sí fija la expectativa de cómo encuadrar antes de disparar. */}
+      <label className={`mt-6 block ${procesando ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+        <div
+          className={`relative mx-auto flex w-full max-w-[220px] items-center justify-center rounded-lg border-2 border-dashed ${
+            procesando ? 'border-gray-200 bg-gray-50' : 'border-brand-400 bg-brand-50/40'
+          }`}
+          style={{ aspectRatio: '3 / 4' }}
+        >
+          {/* Esquinas tipo visor de cámara */}
+          {!procesando && (
+            <>
+              <span className="absolute left-1.5 top-1.5 h-5 w-5 border-l-2 border-t-2 border-brand-500" />
+              <span className="absolute right-1.5 top-1.5 h-5 w-5 border-r-2 border-t-2 border-brand-500" />
+              <span className="absolute bottom-1.5 left-1.5 h-5 w-5 border-b-2 border-l-2 border-brand-500" />
+              <span className="absolute bottom-1.5 right-1.5 h-5 w-5 border-b-2 border-r-2 border-brand-500" />
+            </>
+          )}
+          <p
+            className={`px-4 text-center text-sm font-medium ${procesando ? 'text-gray-400' : 'text-brand-700'}`}
+          >
+            {procesando ? 'Procesando…' : 'Centra la factura dentro del recuadro'}
+          </p>
+        </div>
+        <span className="mt-2 block text-center text-sm text-gray-500">
+          {procesando ? '' : 'Toca para tomar la foto'}
+        </span>
         <input
           type="file"
           accept="image/*"

@@ -1,4 +1,4 @@
-import type { ExtractedData, ReceiptStatus } from '../types'
+import type { ExtractedData, FormaPago, ReceiptStatus } from '../types'
 import { calcularDV } from '../utils/dv'
 import { normalizarFecha } from './fecha'
 
@@ -70,12 +70,45 @@ function parseMonto(texto: string): number | undefined {
 // fallback de "el valor más grande" y meterse como total.
 const TOTAL_MAXIMO_PLAUSIBLE = 100_000_000
 
+// Piso plausible para una base/total en pesos colombianos: sirve para
+// descartar "montos" que en realidad son ruido del OCR (ej. un "$" que se leyó
+// como "8", o un dígito suelto). En COP no hay facturas de menos de $100.
+const MONTO_MINIMO_PLAUSIBLE = 100
+
+/**
+ * Primer monto "de verdad" dentro de un fragmento: el primero que parsea a un
+ * número >= MONTO_MINIMO_PLAUSIBLE. Así se salta el ruido tipo "Subtotal: 8
+ * 14.100,00", donde el "8" (un "$" mal leído) es un token numérico pero no un
+ * monto real. Admite montos partidos por el OCR con un espacio ("14,100, 00").
+ */
+function primerMontoPlausible(fragmento: string): number | undefined {
+  // Un dígito seguido de dígitos/./,/espacio y cerrado por dígito: captura
+  // "14,100, 00" completo. El espacio (no el salto de línea) permite el corte
+  // que mete el OCR entre los miles y los decimales.
+  const regex = /\d[\d., ]*\d|\d/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(fragmento))) {
+    const monto = parseMonto(match[0])
+    if (monto !== undefined && monto >= MONTO_MINIMO_PLAUSIBLE && monto <= TOTAL_MAXIMO_PLAUSIBLE) {
+      return monto
+    }
+  }
+  return undefined
+}
+
+// Líneas cuyo monto NO es el total: lo que el cliente entregó ("Recibido"),
+// el vuelto ("Cambio"/"Devuelta"). Si no se excluyeran, el fallback de "el
+// monto más grande" podría tomar los $50.100 de "Recibido" como total y, con
+// un NIT válido, marcar el recibo como 'ok' con un total equivocado.
+const LINEA_NO_ES_TOTAL = /recib|cambio|vuelt|devuel/i
+
 /**
  * Todos los montos "tipo dinero" del texto: tokens con separadores de miles
  * (1.234 / 1,234) o con decimales (1234,56). Se excluyen bloques de puros
  * dígitos sin separador (un NIT, un teléfono o un número de factura no son
- * montos), y los que superan el techo plausible. Devuelve los valores parseados
- * para el fallback de detectarTotal.
+ * montos), los que superan el techo plausible, y los que están en líneas de
+ * Recibido/Cambio. Devuelve los valores parseados para el fallback de
+ * detectarTotal.
  */
 function detectarMontos(texto: string): number[] {
   const montos: number[] = []
@@ -83,10 +116,14 @@ function detectarMontos(texto: string): number[] {
   // decimales al final) o con decimales (\d+[.,]\d{2}). Se ignora un "$"
   // previo si lo hay: no cambia el valor, solo delimita.
   const regex = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{2}/g
-  let match: RegExpExecArray | null
-  while ((match = regex.exec(texto))) {
-    const monto = parseMonto(match[0])
-    if (monto !== undefined && monto <= TOTAL_MAXIMO_PLAUSIBLE) montos.push(monto)
+  // Se recorre por línea para poder descartar líneas de Recibido/Cambio.
+  for (const linea of texto.split(/\r?\n/)) {
+    if (LINEA_NO_ES_TOTAL.test(linea)) continue
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(linea))) {
+      const monto = parseMonto(match[0])
+      if (monto !== undefined && monto <= TOTAL_MAXIMO_PLAUSIBLE) montos.push(monto)
+    }
   }
   return montos
 }
@@ -96,26 +133,39 @@ function detectarMontos(texto: string): number[] {
  * repetirse en la factura (encabezado + pie), así que se toma el valor más
  * frecuente entre todas las coincidencias en vez del primero o el último.
  *
- * Con OCR ruidoso "TOTAL" se lee mal ("T0TAL", "TUTAL"), así que la etiqueta
- * se busca con una regex tolerante ([O0U] en la 2ª letra). Y si NINGUNA
- * etiqueta matchea, se cae a un último recurso: el monto más grande del texto
- * (en facturas térmicas el total casi siempre es el número mayor).
+ * Detalles que impone el OCR real (ver factura de parqueadero de ejemplo):
+ * - "TOTAL" se lee mal ("T0TAL", "TUTAL"): [O0U] en la 2ª letra.
+ * - Entre la etiqueta y el monto aparece basura ("TOTAL A PAGAR ===> $"):
+ *   se puentea con [^\d\n]{0,25} (cualquier no-dígito, sin cruzar de línea).
+ * - \b antes de la etiqueta para NO matchear "Subtotal" (no hay borde de
+ *   palabra entre "sub" y "total", así que \bTOTAL lo excluye solo).
+ * - El monto puede venir partido por un espacio ("14,100, 00"): el grupo
+ *   captura dígitos/./,/espacio y parseMonto quita el espacio.
+ * Si NINGUNA etiqueta matchea, último recurso: el monto más grande del texto,
+ * pero marcado como NO confiable (`confiable: false`) — un total adivinado así
+ * (podría ser el "Recibido", un valor asegurado, etc.) nunca debe alcanzar por
+ * sí solo para dar el recibo por 'ok'; a lo sumo queda en 'review'.
  */
-function detectarTotal(texto: string): number | undefined {
+interface TotalDetectado {
+  valor: number
+  // true si vino de una etiqueta "TOTAL" real; false si es la conjetura del
+  // fallback "monto más grande".
+  confiable: boolean
+}
+
+function detectarTotal(texto: string): TotalDetectado | undefined {
   const candidatos: number[] = []
-  // T[O0U]TAL tolera el ruido típico de OCR sobre la "O". [A-Z0-9\s] entre la
-  // etiqueta y el número cubre "TOTAL A PAGAR", "TOTAL FACTURA", etc.
-  const regex = /T[O0U]TAL\s*[A-Z0-9\s]*?:?\s*\$?\s*([\d.,]+)/gi
+  const regex = /\bT[O0U]TAL[^\d\n]{0,25}(\d[\d., ]*\d|\d)/gi
   let match: RegExpExecArray | null
   while ((match = regex.exec(texto))) {
     const monto = parseMonto(match[1])
-    if (monto !== undefined && monto <= TOTAL_MAXIMO_PLAUSIBLE) candidatos.push(monto)
+    if (monto !== undefined && monto >= MONTO_MINIMO_PLAUSIBLE && monto <= TOTAL_MAXIMO_PLAUSIBLE) {
+      candidatos.push(monto)
+    }
   }
 
   if (candidatos.length > 0) {
-    // Más frecuente; a igual frecuencia, el mayor (el total suele repetirse y
-    // ser mayor que un "subtotal" que también matchea \btotal\b... acá ya no,
-    // pero se mantiene la desambiguación por si dos montos empatan).
+    // Más frecuente; a igual frecuencia, el mayor.
     const conteo = new Map<number, number>()
     for (const c of candidatos) conteo.set(c, (conteo.get(c) ?? 0) + 1)
     let mejor = candidatos[0]
@@ -127,29 +177,69 @@ function detectarTotal(texto: string): number | undefined {
         mejorConteo = n
       }
     }
-    return mejor
+    return { valor: mejor, confiable: true }
   }
 
   // Fallback: sin etiqueta "total" legible, el monto más grande del texto.
   const montos = detectarMontos(texto)
   if (montos.length === 0) return undefined
-  return Math.max(...montos)
+  return { valor: Math.max(...montos), confiable: false }
 }
 
+/**
+ * BASE gravable. Se prueba "base" (servicio/gravable) ANTES que "subtotal":
+ * en la factura real la línea confiable es "Base Servicio: $ 11.848,74",
+ * mientras que "Subtotal: 8 14.100,00" trae ruido (el "8") y en realidad
+ * repite el total, no la base. primerMontoPlausible salta ese "8".
+ */
 function detectarBaseExplicita(texto: string): number | undefined {
-  const m = texto.match(/(?:base\s*(?:gravable)?|subtotal)[^\d\n]{0,20}([\d.,]+)/i)
-  return m ? parseMonto(m[1]) : undefined
-}
-
-/** % IVA: 19, 5 o 0 dentro de una ventana de texto cerca de "IVA"/"Incluido". */
-function detectarPorcentajeIva(texto: string): number | undefined {
-  const centros = [...texto.matchAll(/iva|incluido/gi)].map((m) => m.index ?? 0)
-  for (const centro of centros) {
-    const alrededor = texto.slice(Math.max(0, centro - 20), centro + 20)
-    for (const pct of [19, 5, 0]) {
-      if (new RegExp(`\\b${pct}\\s?%`).test(alrededor)) return pct / 100
+  const etiquetas = [/base(?:\s*(?:gravable|servicio))?/gi, /subtotal/gi]
+  for (const etiqueta of etiquetas) {
+    let match: RegExpExecArray | null
+    while ((match = etiqueta.exec(texto))) {
+      const ventana = texto.slice(match.index + match[0].length, match.index + match[0].length + 30)
+      const monto = primerMontoPlausible(ventana)
+      if (monto !== undefined) return monto
     }
   }
+  return undefined
+}
+
+/**
+ * % IVA: 19, 5 o 0 cerca de "IVA"/"Incluido". Dos pasadas:
+ *  1. Con "%" explícito ("19 %", "19%", "19.00%") — la señal más limpia. Se
+ *     admiten decimales antes del "%" porque muchas facturas imprimen "19.00%".
+ *  2. Sin "%": el OCR se lo come seguido ("Impu:- 19.008 IVA"), así que se
+ *     acepta el número de tasa (19 o 5, con decimales o no) pegado a "IVA".
+ *     No se busca "0" sin "%" porque un "0" suelto es demasiado común y daría
+ *     falsos 0% de IVA.
+ */
+function detectarPorcentajeIva(texto: string): number | undefined {
+  const centros = [...texto.matchAll(/iva|incluido/gi)].map((m) => m.index ?? 0)
+
+  // Pasada 1: con signo "%" (admite decimales, ej. "19.00%").
+  for (const centro of centros) {
+    const alrededor = texto.slice(Math.max(0, centro - 22), centro + 22)
+    for (const pct of [19, 5, 0]) {
+      if (new RegExp(`\\b${pct}(?:[.,]\\d{1,2})?\\s?%`).test(alrededor)) return pct / 100
+    }
+  }
+
+  // Pasada 2: sin "%", tasa (19/5) pegada a "IVA" — cubre "19.008 IVA".
+  for (const centro of centros) {
+    const alrededor = texto.slice(Math.max(0, centro - 22), centro + 22)
+    for (const pct of [19, 5]) {
+      if (new RegExp(`\\b${pct}(?:[.,]\\d{1,3})?\\b`).test(alrededor)) return pct / 100
+    }
+  }
+
+  return undefined
+}
+
+/** Forma de pago: efectivo/contado -> 'contado', crédito/tarjeta de crédito -> 'credito'. */
+function detectarFormaPago(texto: string): FormaPago | undefined {
+  if (/cr[eé]dito/i.test(texto)) return 'credito'
+  if (/efectivo|contado|d[eé]bito|tarjeta/i.test(texto)) return 'contado'
   return undefined
 }
 
@@ -234,11 +324,22 @@ function esMayoriaAlfabetica(linea: string): boolean {
   return alfabeticos / limpia.length > 0.6
 }
 
-/** Primera línea "mayormente texto" antes de la línea del NIT. */
+// Palabras de líneas del encabezado que NO son la razón social: rótulos de la
+// factura ("FACTURA ELECTRONICA DE VENTA"), y ruido típico del OCR como
+// "Recibido"/"Reóbido" (que si aparece como primera línea alfabética se colaba
+// como nombre del emisor). Se saltan para llegar al nombre real del negocio.
+const LINEA_NO_ES_RAZON_SOCIAL = /factura|electr[oó]nica|\bventa\b|recib|re[oó]bido|consumidor|adquiriente|cliente/i
+
+/** Primera línea "mayormente texto" (y no un rótulo/ruido) antes de la línea del NIT. */
 function extraerRazonSocial(lineas: string[], lineaNit: number | undefined): string | undefined {
   const limite = lineaNit ?? Math.min(8, lineas.length)
   for (let i = 0; i < limite; i++) {
-    if (esMayoriaAlfabetica(lineas[i])) return lineas[i].trim()
+    const linea = lineas[i].trim()
+    // Mínimo 6 caracteres: descarta líneas cortas tipo "au", "Nr." o "Tel:".
+    if (linea.length < 6) continue
+    if (!esMayoriaAlfabetica(linea)) continue
+    if (LINEA_NO_ES_RAZON_SOCIAL.test(linea)) continue
+    return linea
   }
   return undefined
 }
@@ -308,12 +409,16 @@ export function reconcile(rawText: string): ReconcileResult {
   const numero = extraerNumeroFactura(rawText)
   const fecha = extraerFecha(rawText)
   const concepto = extraerConcepto(rawText)
+  const formaPago = detectarFormaPago(rawText)
 
   // `total` es el valor DETECTADO en el texto (usado como pista y, cuando
   // hay suficiente información independiente, como chequeo de consistencia).
   // El total que termina en `data` es el RECONSTRUIDO (base+iva) — ver
-  // totalFinal más abajo.
-  const total = detectarTotal(rawText)
+  // totalFinal más abajo. `totalDetectadoConfiable` distingue un total leído
+  // de una etiqueta "TOTAL" real de una conjetura del fallback (ver detectarTotal).
+  const totalDetectado = detectarTotal(rawText)
+  const total = totalDetectado?.valor
+  const totalDetectadoConfiable = totalDetectado?.confiable ?? false
   const baseExplicita = detectarBaseExplicita(rawText)
   const ivaIncluido = /iva\s+incluido|incluido\s+de\s+iva/i.test(rawText)
   const noResponsableIva = /no\s+responsable\s+de\s+iva/i.test(rawText)
@@ -364,12 +469,17 @@ export function reconcile(rawText: string): ReconcileResult {
     porcentajeIva,
     ivaMonto,
     total: totalFinal,
+    formaPago,
   }
 
   // Estado en 3 niveles (ver ReceiptStatus). 'error' es el ÚLTIMO recurso: solo
   // cuando no se rescató NADA útil. Con OCR ruidoso, lo normal es 'review'.
   const nitValido = candidatoNit?.confianza === 'alta'
-  const tieneTotal = totalFinal !== undefined
+  // Un total CONFIABLE es el reconstruido (base+iva) o el leído de una etiqueta
+  // "TOTAL" real — NO la conjetura del fallback "monto más grande", que podría
+  // ser el Recibido/Cambio y daría un 'ok' con total equivocado.
+  const totalConfiable = totalReconstruido !== undefined || totalDetectadoConfiable
+  const tieneTotalConfiable = totalFinal !== undefined && totalConfiable
   // Discrepancia REAL: se reconstruyó base+iva Y se detectó un total impreso
   // independiente, y no coinciden por más de $1 (ver valoresReconcilian).
   const hayDiscrepancia =
@@ -377,7 +487,7 @@ export function reconcile(rawText: string): ReconcileResult {
   const hayAlgoUtil = candidatoNit !== undefined || totalFinal !== undefined || razonSocial !== undefined
 
   let status: ReceiptStatus
-  if (nitValido && tieneTotal && !hayDiscrepancia) {
+  if (nitValido && tieneTotalConfiable && !hayDiscrepancia) {
     status = 'ok'
   } else if (hayAlgoUtil) {
     status = 'review'

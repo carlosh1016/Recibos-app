@@ -37,6 +37,25 @@ export function Home() {
     navigate(`/capture/${id}`)
   }
 
+  // Descartar una sesión completa. Como los recibos referencian sessionId "a
+  // mano" (IndexedDB no tiene foreign keys ni ON DELETE CASCADE, ver db/db.ts),
+  // el borrado en cascada es responsabilidad nuestra: se eliminan primero los
+  // recibos de la sesión y luego la sesión, ambos dentro de una transacción
+  // para que no quede a medias (recibos huérfanos sin sesión) si algo falla.
+  async function eliminarSesion(session: Session) {
+    if (!session.id) return
+    const n = await db.receipts.where('sessionId').equals(session.id).count()
+    const detalle = n > 0 ? ` y sus ${n} recibo(s)` : ''
+    if (!window.confirm(`¿Eliminar la sesión "${session.name}"${detalle}? Esta acción no se puede deshacer.`)) {
+      return
+    }
+    await db.transaction('rw', db.receipts, db.sessions, async () => {
+      await db.receipts.where('sessionId').equals(session.id!).delete()
+      await db.sessions.delete(session.id!)
+    })
+    setSessions((prev) => prev.filter((s) => s.id !== session.id))
+  }
+
   return (
     <div className="mx-auto max-w-md p-6">
       <h1 className="text-2xl font-semibold text-brand-700">Recibos App</h1>
@@ -62,16 +81,25 @@ export function Home() {
 
       <ul className="mt-6 divide-y divide-gray-200">
         {sessions.map((session) => (
-          <li key={session.id} className="py-3">
+          <li key={session.id} className="flex items-center gap-2 py-3">
             <button
               type="button"
               onClick={() => navigate(`/capture/${session.id}`)}
-              className="w-full text-left"
+              className="flex-1 text-left"
             >
               <span className="font-medium text-gray-900">{session.name}</span>
               <span className="block text-xs text-gray-500">
                 {session.createdAt.toLocaleString('es-CO')}
               </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void eliminarSesion(session)}
+              aria-label={`Eliminar sesión ${session.name}`}
+              title="Eliminar sesión"
+              className="shrink-0 rounded border border-transparent px-2 py-1 text-sm text-gray-400 hover:border-red-300 hover:bg-red-50 hover:text-red-600"
+            >
+              🗑
             </button>
           </li>
         ))}
