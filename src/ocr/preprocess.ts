@@ -143,8 +143,12 @@ function aplicarPipelineOpenCv(cv: CvModule, input: EntradaImagen): HTMLCanvasEl
   clahe.delete()
   sinRuido.delete()
 
+  // blockSize 21 y C 10 (antes 31/15): un umbral menos agresivo. Sobre
+  // facturas térmicas (fondo gris claro, tinta tenue) un blockSize grande +
+  // C alto se comía trazos finos de letras y dejaba el texto "roto", que es
+  // justo lo que disparaba el ruido en el OCR. blockSize DEBE ser impar.
   const binaria = new cv.Mat()
-  cv.adaptiveThreshold(conClahe, binaria, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 31, 15)
+  cv.adaptiveThreshold(conClahe, binaria, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 10)
   conClahe.delete()
 
   const canvasSalida = document.createElement('canvas')
@@ -154,7 +158,13 @@ function aplicarPipelineOpenCv(cv: CvModule, input: EntradaImagen): HTMLCanvasEl
   return canvasSalida
 }
 
-/** Fallback si opencv.js no carga/inicializa/expira: gris + contraste con Canvas 2D. */
+/**
+ * Fallback si opencv.js no carga/inicializa/expira: gris -> contraste ->
+ * binarización, todo con Canvas 2D. A propósito NO reescala (a diferencia del
+ * pipeline de OpenCV): un resize x2 en canvas usa interpolación bilineal
+ * simple que, sobre facturas térmicas, difumina más de lo que ayuda. Se deja
+ * la imagen a resolución nativa y solo se limpia el contraste.
+ */
 function preprocesarConCanvas2D(input: EntradaImagen): HTMLCanvasElement {
   const { ancho, alto } = dimensiones(input)
   const canvas = document.createElement('canvas')
@@ -174,13 +184,18 @@ function preprocesarConCanvas2D(input: EntradaImagen): HTMLCanvasElement {
 
   const imageData = ctx.getImageData(0, 0, ancho, alto)
   const pixeles = imageData.data
-  const CONTRASTE = 1.4
+  const CONTRASTE = 1.5
   for (let i = 0; i < pixeles.length; i += 4) {
+    // a) gris (luminancia ponderada)
     const gris = 0.299 * pixeles[i] + 0.587 * pixeles[i + 1] + 0.114 * pixeles[i + 2]
-    const conContraste = Math.min(255, Math.max(0, (gris - 128) * CONTRASTE + 128))
-    pixeles[i] = conContraste
-    pixeles[i + 1] = conContraste
-    pixeles[i + 2] = conContraste
+    // b) contraste alrededor del punto medio
+    const conContraste = (gris - 128) * CONTRASTE + 128
+    // c) binarización dura: negro o blanco, nada intermedio. Sobre texto de
+    //    factura da un resultado más limpio para el OCR que dejar grises.
+    const binario = conContraste > 128 ? 255 : 0
+    pixeles[i] = binario
+    pixeles[i + 1] = binario
+    pixeles[i + 2] = binario
   }
   ctx.putImageData(imageData, 0, 0)
 
@@ -212,6 +227,7 @@ export async function preprocess(
     const cargaInicio = performance.now()
     const cv = await cargarOpenCv()
     console.log(`[preprocess] opencv.js cargado en ${Math.round(performance.now() - cargaInicio)}ms`)
+    console.log('[preprocess] usando:', 'opencv')
     onProgress?.(0.5)
 
     const resultado = aplicarPipelineOpenCv(cv, input)
@@ -224,6 +240,7 @@ export async function preprocess(
         'usando fallback de Canvas 2D:',
       error,
     )
+    console.log('[preprocess] usando:', 'canvas-fallback')
     onProgress?.(0.5)
     const fallbackInicio = performance.now()
     const resultado = preprocesarConCanvas2D(input)

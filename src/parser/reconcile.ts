@@ -15,8 +15,8 @@ export interface ReconcileResult {
   // Decidido acá (no en el caller) porque es exactamente la información que
   // Capture.tsx necesita para guardar el Receipt con el status correcto: si
   // los valores no cuadran o el NIT tiene baja confianza, el recibo nace en
-  // 'error' para que Review lo priorice, en vez de nacer 'pending' y que el
-  // usuario tenga que notar el problema él mismo.
+  // 'review' para que Review lo priorice; solo nace en 'error' si no se
+  // rescató nada útil. Ver ReceiptStatus para el detalle de cada estado.
   status: ReceiptStatus
   // Confianza específica del NIT (independiente del status general), para
   // que Review pueda mostrar "revisar NIT" en vez de solo "algo no cuadra".
@@ -64,38 +64,76 @@ function parseMonto(texto: string): number | undefined {
   return Number.isFinite(valor) ? valor : undefined
 }
 
+// Techo plausible para un total de factura: descarta de una vez números que
+// en realidad son un NIT (9-11 dígitos -> cientos/miles de millones), un CUFE,
+// o un número de resolución DIAN, que si no se acotara podrían ganar el
+// fallback de "el valor más grande" y meterse como total.
+const TOTAL_MAXIMO_PLAUSIBLE = 100_000_000
+
+/**
+ * Todos los montos "tipo dinero" del texto: tokens con separadores de miles
+ * (1.234 / 1,234) o con decimales (1234,56). Se excluyen bloques de puros
+ * dígitos sin separador (un NIT, un teléfono o un número de factura no son
+ * montos), y los que superan el techo plausible. Devuelve los valores parseados
+ * para el fallback de detectarTotal.
+ */
+function detectarMontos(texto: string): number[] {
+  const montos: number[] = []
+  // Número con al menos un separador de miles (\d{1,3}([.,]\d{3})+, admite
+  // decimales al final) o con decimales (\d+[.,]\d{2}). Se ignora un "$"
+  // previo si lo hay: no cambia el valor, solo delimita.
+  const regex = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+[.,]\d{2}/g
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(texto))) {
+    const monto = parseMonto(match[0])
+    if (monto !== undefined && monto <= TOTAL_MAXIMO_PLAUSIBLE) montos.push(monto)
+  }
+  return montos
+}
+
 /**
  * TOTAL: "el valor grande junto a 'TOTAL A PAGAR' o 'Total'". Suele
  * repetirse en la factura (encabezado + pie), así que se toma el valor más
  * frecuente entre todas las coincidencias en vez del primero o el último.
+ *
+ * Con OCR ruidoso "TOTAL" se lee mal ("T0TAL", "TUTAL"), así que la etiqueta
+ * se busca con una regex tolerante ([O0U] en la 2ª letra). Y si NINGUNA
+ * etiqueta matchea, se cae a un último recurso: el monto más grande del texto
+ * (en facturas térmicas el total casi siempre es el número mayor).
  */
 function detectarTotal(texto: string): number | undefined {
   const candidatos: number[] = []
-  // \btotal\b no matchea "subtotal" (no hay borde de palabra entre "sub" y "total").
-  const regex = /total\s*a\s*pagar|\btotal\b/gi
+  // T[O0U]TAL tolera el ruido típico de OCR sobre la "O". [A-Z0-9\s] entre la
+  // etiqueta y el número cubre "TOTAL A PAGAR", "TOTAL FACTURA", etc.
+  const regex = /T[O0U]TAL\s*[A-Z0-9\s]*?:?\s*\$?\s*([\d.,]+)/gi
   let match: RegExpExecArray | null
   while ((match = regex.exec(texto))) {
-    const ventana = texto.slice(match.index, match.index + match[0].length + 25)
-    const numero = ventana.match(/([\d.,]+)/)
-    if (numero) {
-      const monto = parseMonto(numero[1])
-      if (monto !== undefined) candidatos.push(monto)
-    }
+    const monto = parseMonto(match[1])
+    if (monto !== undefined && monto <= TOTAL_MAXIMO_PLAUSIBLE) candidatos.push(monto)
   }
-  if (candidatos.length === 0) return undefined
 
-  const conteo = new Map<number, number>()
-  for (const c of candidatos) conteo.set(c, (conteo.get(c) ?? 0) + 1)
-  let mejor = candidatos[0]
-  let mejorConteo = 0
-  for (const c of candidatos) {
-    const n = conteo.get(c) ?? 0
-    if (n > mejorConteo) {
-      mejor = c
-      mejorConteo = n
+  if (candidatos.length > 0) {
+    // Más frecuente; a igual frecuencia, el mayor (el total suele repetirse y
+    // ser mayor que un "subtotal" que también matchea \btotal\b... acá ya no,
+    // pero se mantiene la desambiguación por si dos montos empatan).
+    const conteo = new Map<number, number>()
+    for (const c of candidatos) conteo.set(c, (conteo.get(c) ?? 0) + 1)
+    let mejor = candidatos[0]
+    let mejorConteo = 0
+    for (const c of candidatos) {
+      const n = conteo.get(c) ?? 0
+      if (n > mejorConteo || (n === mejorConteo && c > mejor)) {
+        mejor = c
+        mejorConteo = n
+      }
     }
+    return mejor
   }
-  return mejor
+
+  // Fallback: sin etiqueta "total" legible, el monto más grande del texto.
+  const montos = detectarMontos(texto)
+  if (montos.length === 0) return undefined
+  return Math.max(...montos)
 }
 
 function detectarBaseExplicita(texto: string): number | undefined {
@@ -123,36 +161,70 @@ interface CandidatoNit {
   lineaIndex: number
 }
 
+/** Arma un CandidatoNit a partir de un bloque de dígitos ya limpio, o undefined si no es válido. */
+function evaluarBloqueNit(soloDigitos: string, lineaIndex: number): CandidatoNit | undefined {
+  if (soloDigitos === NIT_CONSUMIDOR_FINAL) return undefined
+  // NIT de 9-10 dígitos + 1 dígito de DV = 10-11 dígitos en total.
+  if (soloDigitos.length < 10 || soloDigitos.length > 11) return undefined
+
+  const nit = soloDigitos.slice(0, -1)
+  const dvOCR = soloDigitos.slice(-1)
+  const dv = calcularDV(nit)
+  return { nit, dv, dvOCR, confianza: dv === dvOCR ? 'alta' : 'baja', lineaIndex }
+}
+
 /**
  * NIT del emisor: se busca solo en las primeras 8 líneas (ahí es donde las
  * facturas colombianas casi siempre imprimen los datos del emisor). El DV se
  * separa tomando el ÚLTIMO dígito del bloque numérico completo (después de
  * quitar puntos/espacios/guiones) en vez de buscar un guion explícito — el
  * guion se pierde seguido en el OCR, pero el dígito sigue estando ahí.
+ *
+ * Dos pasadas, en orden de preferencia:
+ *  1. Líneas ETIQUETADAS con "NIT": es la señal más fuerte de que ese número
+ *     es el NIT del emisor. Se prefiere una con DV válido; si solo hay una con
+ *     DV que no cuadra (OCR se comió un dígito), se guarda como respaldo.
+ *  2. Sin etiqueta: cuando el OCR es tan ruidoso que ni "NIT" se leyó, se
+ *     escanea cualquier bloque de 10-11 dígitos del encabezado, pero SOLO se
+ *     acepta si su DV calculado coincide (algoritmo DIAN). Ese match del DV es
+ *     lo que evita tomar un teléfono o un número de factura como NIT.
  */
 function buscarNitEmisor(lineas: string[]): CandidatoNit | undefined {
-  const NIT_CANDIDATO = /(\d[\d.\s-]{6,18}\d)/
+  // Bloques de 10-11 dígitos admitiendo puntos/espacios/guiones intercalados.
+  const NIT_CANDIDATO = /\d[\d.\s-]{8,18}\d/g
+  const limite = Math.min(8, lineas.length)
 
-  for (let i = 0; i < Math.min(8, lineas.length); i++) {
+  let etiquetadoBaja: CandidatoNit | undefined
+  let sinEtiquetaAlta: CandidatoNit | undefined
+
+  for (let i = 0; i < limite; i++) {
     const linea = lineas[i]
-    if (!/nit/i.test(linea)) continue
     if (PALABRAS_EXCLUYEN_NIT.test(linea)) continue
+    const etiquetada = /nit/i.test(linea)
 
-    const match = linea.match(NIT_CANDIDATO)
-    if (!match) continue
+    for (const match of linea.matchAll(NIT_CANDIDATO)) {
+      const soloDigitos = match[0].replace(/[.\s-]/g, '')
+      const candidato = evaluarBloqueNit(soloDigitos, i)
+      if (!candidato) continue
 
-    const soloDigitos = match[1].replace(/[.\s-]/g, '')
-    if (soloDigitos === NIT_CONSUMIDOR_FINAL) continue
-    // NIT de 9-10 dígitos + 1 dígito de DV = 10-11 dígitos en total.
-    if (soloDigitos.length < 10 || soloDigitos.length > 11) continue
-
-    const nit = soloDigitos.slice(0, -1)
-    const dvOCR = soloDigitos.slice(-1)
-    const dv = calcularDV(nit)
-
-    return { nit, dv, dvOCR, confianza: dv === dvOCR ? 'alta' : 'baja', lineaIndex: i }
+      if (etiquetada) {
+        // Etiquetado + DV válido: la mejor evidencia posible, se devuelve ya.
+        if (candidato.confianza === 'alta') return candidato
+        // Etiquetado pero DV no cuadra: respaldo por si no aparece nada mejor.
+        etiquetadoBaja ??= candidato
+      } else if (candidato.confianza === 'alta') {
+        // Sin etiqueta pero con DV válido: se guarda; solo gana si no hubo
+        // ningún candidato etiquetado (ver el return de abajo).
+        sinEtiquetaAlta ??= candidato
+      }
+      // Sin etiqueta y DV inválido: se ignora (demasiados falsos positivos).
+    }
   }
-  return undefined
+
+  // Preferencia: etiquetado-alta ya salió con return. Acá, un DV válido sin
+  // etiqueta le gana a un etiquetado con DV roto (el DV correcto pesa más que
+  // la etiqueta ruidosa).
+  return sinEtiquetaAlta ?? etiquetadoBaja
 }
 
 function esMayoriaAlfabetica(linea: string): boolean {
@@ -224,9 +296,9 @@ function valoresReconcilian(totalDetectado?: number, totalReconstruido?: number)
  * Punto de entrada real del parser (reemplaza el antiguo parser/index.ts,
  * que solo orquestaba stubs). Recibe el texto crudo de tesseract.js y
  * devuelve tanto los datos extraídos como el status que debería tener el
- * Receipt: 'error' si algo no cuadra (valores o NIT de baja confianza), para
- * que ese recibo salte a la vista en Review en vez de perderse entre los
- * demás.
+ * Receipt: 'ok' si NIT válido + total sin discrepancia, 'review' si se sacó
+ * algo pero no cuadra perfecto (lo normal con OCR ruidoso), y 'error' solo
+ * como último recurso cuando no se rescató nada útil. Ver ReceiptStatus.
  */
 export function reconcile(rawText: string): ReconcileResult {
   const lineas = rawText.split(/\r?\n/).filter((l) => l.trim().length > 0)
@@ -294,9 +366,24 @@ export function reconcile(rawText: string): ReconcileResult {
     total: totalFinal,
   }
 
-  const nitOk = candidatoNit?.confianza === 'alta'
-  const valoresOk = valoresReconcilian(total, totalReconstruido)
-  const status: ReceiptStatus = nitOk && valoresOk ? 'pending' : 'error'
+  // Estado en 3 niveles (ver ReceiptStatus). 'error' es el ÚLTIMO recurso: solo
+  // cuando no se rescató NADA útil. Con OCR ruidoso, lo normal es 'review'.
+  const nitValido = candidatoNit?.confianza === 'alta'
+  const tieneTotal = totalFinal !== undefined
+  // Discrepancia REAL: se reconstruyó base+iva Y se detectó un total impreso
+  // independiente, y no coinciden por más de $1 (ver valoresReconcilian).
+  const hayDiscrepancia =
+    totalReconstruido !== undefined && total !== undefined && !valoresReconcilian(total, totalReconstruido)
+  const hayAlgoUtil = candidatoNit !== undefined || totalFinal !== undefined || razonSocial !== undefined
+
+  let status: ReceiptStatus
+  if (nitValido && tieneTotal && !hayDiscrepancia) {
+    status = 'ok'
+  } else if (hayAlgoUtil) {
+    status = 'review'
+  } else {
+    status = 'error'
+  }
 
   return { data, status, confianzaNit: candidatoNit?.confianza }
 }

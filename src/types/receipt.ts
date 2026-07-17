@@ -5,7 +5,17 @@ import type { ExtractedData } from './extractedData'
 // se puede usar directamente para narrowing con un switch/if en la UI:
 //   if (receipt.status === 'error') { ... }
 // y TS sabe exactamente qué otros valores son posibles.
-export type ReceiptStatus = 'pending' | 'reviewed' | 'error'
+//
+// Tres estados, en orden de "qué tan confiable quedó la extracción":
+// - 'ok':     NIT con DV válido Y total presente sin discrepancia (base+iva no
+//             contradice el total impreso). El parser lo dejó listo, o el
+//             usuario lo confirmó en Review ("Marcar revisado" -> 'ok').
+// - 'review': se extrajo ALGO útil (NIT, total o razón social) pero no cuadra
+//             perfecto: base+iva no coincide, NIT de baja confianza (DV no
+//             validó), o faltan campos. Necesita ojo humano en Review.
+// - 'error':  ÚLTIMO recurso, no el default. Solo cuando no se pudo sacar NADA
+//             útil (ni NIT, ni total, ni razón social) — foto ilegible.
+export type ReceiptStatus = 'ok' | 'review' | 'error'
 
 /**
  * Un recibo individual: la foto + lo que el OCR leyó en crudo + lo que el parser

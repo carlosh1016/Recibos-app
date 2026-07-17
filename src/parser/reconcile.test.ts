@@ -22,7 +22,7 @@ describe('reconcile', () => {
     expect(data.total).toBe(14100)
     expect(data.valorBase).toBe(11848.74)
     expect(data.ivaMonto).toBe(2251.26)
-    expect(status).toBe('pending') // base + iva cuadra con total -> no requiere revisión
+    expect(status).toBe('ok') // NIT válido + base+iva cuadra con total -> no requiere revisión
   })
 
   it('normaliza el NIT del emisor y valida su DV con el algoritmo DIAN', () => {
@@ -55,7 +55,7 @@ describe('reconcile', () => {
     expect(confianzaNit).toBe('alta')
   })
 
-  it('marca status "error" cuando el DV leído no coincide con el calculado (baja confianza)', () => {
+  it('marca status "review" (no "error") cuando el DV leído no coincide con el calculado (baja confianza)', () => {
     const texto = `
       FACTURA ELECTRONICA DE VENTA
       Distribuidora Ejemplo SAS
@@ -67,8 +67,10 @@ describe('reconcile', () => {
 
     const { status, confianzaNit } = reconcile(texto)
 
+    // El NIT no valida el DV, pero SÍ se extrajo algo útil (total, razón
+    // social): eso es 'review' (ojo humano), no 'error' (nada rescatable).
     expect(confianzaNit).toBe('baja')
-    expect(status).toBe('error')
+    expect(status).toBe('review')
   })
 
   it('reconstruye base+iva desde base explícita + % de IVA cuando ambos son independientes del total', () => {
@@ -87,10 +89,10 @@ describe('reconcile', () => {
     expect(data.valorBase).toBe(10000)
     expect(data.ivaMonto).toBe(1900)
     expect(data.total).toBe(11900) // reconstruido (base+iva), no el leído del texto
-    expect(status).toBe('pending')
+    expect(status).toBe('ok')
   })
 
-  it('marca status "error" cuando el total impreso no coincide con base+iva reconstruido', () => {
+  it('marca status "review" cuando el total impreso no coincide con base+iva reconstruido', () => {
     const texto = `
       FACTURA ELECTRONICA DE VENTA
       Distribuidora Ejemplo SAS
@@ -109,6 +111,62 @@ describe('reconcile', () => {
     expect(data.valorBase).toBe(10000)
     expect(data.ivaMonto).toBe(1900)
     expect(data.total).toBe(11900) // se prefiere el reconstruido, no el leído (11.000)
+    // Hay discrepancia real (11.900 vs 11.000 impreso) pero se extrajo de todo:
+    // es 'review' para corregir a mano, no 'error'.
+    expect(status).toBe('review')
+  })
+
+  it('detecta el total aunque el OCR lea "TOTAL" con ruido ("T0TAL")', () => {
+    const texto = `
+      Distribuidora Ejemplo SAS
+      NIT: 901074741-5
+      T0TAL A PAGAR $ 25.000
+    `
+
+    const { data, status } = reconcile(texto)
+
+    expect(data.total).toBe(25000)
+    expect(status).toBe('ok') // NIT válido + total presente, sin reconstrucción que contradiga
+  })
+
+  it('encuentra el NIT del emisor aunque no venga precedido de "NIT" (exige DV válido)', () => {
+    const texto = `
+      CENTRAL PARKING SYSTEM COLOMBIA SAS
+      9010747415
+      FACTURA DE VENTA
+      TOTAL A PAGAR $14.100
+    `
+
+    const { data, confianzaNit } = reconcile(texto)
+
+    expect(data.nit).toBe('901074741')
+    expect(data.dv).toBe('5')
+    expect(confianzaNit).toBe('alta')
+  })
+
+  it('cuando no hay etiqueta "total" legible, cae al monto más grande del texto', () => {
+    const texto = `
+      Tienda Ejemplo SAS
+      NIT: 901074741-5
+      Valor pagado 45.900
+      Su cambio 4.100
+    `
+
+    const { data } = reconcile(texto)
+
+    expect(data.total).toBe(45900)
+  })
+
+  it('marca "error" solo cuando no se rescata nada útil (ni NIT, ni total, ni razón social)', () => {
+    const texto = `
+      #$%& ~~~ |||
+      ?? .. ,,
+    `
+
+    const { data, status } = reconcile(texto)
+
+    expect(data.nit).toBeUndefined()
+    expect(data.total).toBeUndefined()
     expect(status).toBe('error')
   })
 })

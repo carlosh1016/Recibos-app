@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
-    "setup:ocr": "node scripts/setup-ocr-assets.mjs"
+    "setup:ocr": "node scripts/setup-ocr-assets.mjs",
+    "postinstall": "node scripts/setup-ocr-assets.mjs"
   },
   "dependencies": {
     "@techstark/opencv-js": "^5.0.0-release.1",

@@ -9,10 +9,18 @@
 //     quede empaquetado con la app y el OCR funcione offline desde la
 //     primera instalación, sin depender de ese CDN.
 //
-// Se deja como script MANUAL (no un postinstall automático) a propósito:
-// no todos los entornos donde se hace `npm install` tienen salida a
-// internet, y no queremos que una instalación normal falle por eso. Correr
-// una vez con `npm run setup:ocr` después de clonar el repo.
+// Corre automáticamente como `postinstall` tras `npm install` (ver
+// package.json), para que al clonar en una máquina nueva los assets se
+// generen solos y no haya que acordarse de un paso manual — ese olvido era
+// justo la causa del "NetworkError: worker.min.js failed to load". Igual se
+// puede correr a mano con `npm run setup:ocr`.
+//
+// CLAVE: este script NUNCA debe hacer fallar el `npm install`. La copia de
+// worker + core sale de node_modules (siempre presente después de instalar,
+// no necesita red). Solo la descarga del traineddata necesita internet, y si
+// falla (entorno sin salida a la red, CDN caído) se avisa con un warning
+// pero se sigue con exit 0: el resto de la app queda instalable, y basta
+// volver a correr `npm run setup:ocr` con conexión para completar el OCR.
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs'
 import { get } from 'node:https'
 import { createWriteStream } from 'node:fs'
@@ -71,9 +79,22 @@ async function main() {
   if (existsSync(destinoLang)) {
     console.log('spa.traineddata.gz ya existe, no se vuelve a descargar')
   } else {
+    // La descarga es el ÚNICO paso que necesita red. Si falla, no se aborta
+    // todo (ver el comentario de cabecera): se avisa y se sigue, dejando el
+    // resto de los assets ya copiados. `npm run setup:ocr` con internet
+    // completa lo que falte.
     console.log(`descargando ${LANG_URL} ...`)
-    await descargar(LANG_URL, destinoLang)
-    console.log('spa.traineddata.gz descargado')
+    try {
+      await descargar(LANG_URL, destinoLang)
+      console.log('spa.traineddata.gz descargado')
+    } catch (err) {
+      console.warn(
+        `\n[setup:ocr] ADVERTENCIA: no se pudo descargar el modelo de idioma 'spa' ` +
+          `(${err instanceof Error ? err.message : err}).\n` +
+          `El OCR no funcionará hasta que corras \`npm run setup:ocr\` con conexión a internet.`,
+      )
+      return
+    }
   }
 
   console.log('\nListo. Assets de OCR en public/tesseract/.')

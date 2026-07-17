@@ -61,6 +61,16 @@ function crearWorker(): Promise<Worker> {
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.SINGLE_COLUMN,
       user_defined_dpi: '300',
+      // Whitelist: restringe el alfabeto a lo que de verdad aparece en una
+      // factura colombiana (dígitos, letras con acentos/ñ, y la puntuación de
+      // montos/NITs). Sin esto, sobre imágenes ruidosas Tesseract "alucina"
+      // símbolos raros (©, ~, |, etc.) que después ensucian el parser — es la
+      // causa del "Detected N diacritics" y de textos como "S.A:5 o Y BE 2".
+      tessedit_char_whitelist:
+        '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/$%#-: áéíóúÁÉÍÓÚñÑ',
+      // Conserva los espacios entre palabras tal cual (no los colapsa): ayuda
+      // a que "TOTAL A PAGAR" o la razón social lleguen separados al parser.
+      preserve_interword_spaces: '1',
     })
     console.log('[ocr] worker listo')
     return worker
