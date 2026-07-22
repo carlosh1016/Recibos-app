@@ -4,11 +4,12 @@ import { db } from '../db/db'
 import { preprocess } from '../ocr/preprocess'
 import { precalentarWorkerOCR, reconocerTexto, terminarWorkerOCR } from '../ocr/tesseract'
 import { reconcile } from '../parser/reconcile'
+import { extraerConLLM, llmDisponible } from '../extract/geminiExtract'
 
 // Estados explícitos del pipeline por foto, para que la UI siempre muestre
 // en qué etapa está en vez de quedarse "quieta sin errores visibles" (el bug
 // original) mientras algo corre en segundo plano.
-type Estado = 'idle' | 'preprocesando' | 'ocr' | 'parseando' | 'listo' | 'error'
+type Estado = 'idle' | 'llm' | 'preprocesando' | 'ocr' | 'parseando' | 'listo' | 'error'
 
 // Estado de la cámara en vivo (getUserMedia). Si el dispositivo/permiso no la
 // deja usar, se cae a un <input type=file> como respaldo (ver más abajo).
@@ -117,7 +118,8 @@ export function Capture() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
-  const procesando = estado === 'preprocesando' || estado === 'ocr' || estado === 'parseando'
+  const procesando =
+    estado === 'llm' || estado === 'preprocesando' || estado === 'ocr' || estado === 'parseando'
 
   // Arranca la cámara trasera en vivo. Si falla (sin permiso, sin cámara, o
   // navegador de escritorio), se cae al respaldo de <input type=file>.
@@ -194,6 +196,38 @@ export function Capture() {
       const inicioTotal = performance.now()
 
       try {
+        // Ruta ONLINE (LLM con visión): si hay proxy configurado e internet, se
+        // intenta primero — lee la tirilla mucho mejor y devuelve los campos ya
+        // estructurados. Si falla por cualquier razón, se cae al pipeline offline
+        // de Tesseract de abajo (no se re-lanza el error aquí).
+        if (llmDisponible() && navigator.onLine) {
+          try {
+            setEstado('llm')
+            setProgresoGlobal(40)
+            const tLlm = performance.now()
+            const { data, status, raw } = await extraerConLLM(blob)
+            console.log(`[capture] LLM terminó en ${Math.round(performance.now() - tLlm)}ms:`, { data, status })
+
+            await db.receipts.add({
+              sessionId: Number(sessionId),
+              imageBlob: blob,
+              rawOCRText: raw,
+              status,
+              data,
+              createdAt: new Date(),
+            })
+            console.log('[capture] recibo guardado en Dexie (ruta LLM)')
+
+            setProgresoGlobal(100)
+            setEstado('listo')
+            setRecibosCapturados((n) => n + 1)
+            return
+          } catch (llmErr) {
+            console.warn('[capture] ruta LLM falló, usando Tesseract como respaldo:', llmErr)
+            // continúa al pipeline offline de abajo
+          }
+        }
+
         setEstado('preprocesando')
         const tPreproceso = performance.now()
         const canvasPreprocesado = await preprocess(imagen, (fraccion) => {
@@ -288,6 +322,7 @@ export function Capture() {
 
   const mensajeEstado: Record<Estado, string> = {
     idle: 'Encuadra la tirilla dentro del recuadro y toca "Capturar".',
+    llm: 'Foto tomada, leyendo la factura con IA… ya puedes moverte.',
     preprocesando: 'Foto tomada, procesando (mejorando la imagen)… ya puedes moverte.',
     ocr: 'Foto tomada, reconociendo texto (OCR)… ya puedes moverte.',
     parseando: 'Foto tomada, extrayendo los datos de la factura…',
