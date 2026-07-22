@@ -103,10 +103,17 @@ function dimensiones(input: EntradaImagen): { ancho: number; alto: number } {
 }
 
 /**
- * Pipeline pedido: gris -> escalado x2 (INTER_CUBIC) -> denoise -> CLAHE ->
- * umbral adaptativo gaussiano. Cada paso intermedio es un `cv.Mat`, que vive
- * en el heap de WASM, no en el heap de JS con garbage collector — por eso
- * cada Mat que ya no se necesita se libera a mano con `.delete()`.
+ * Pipeline: gris -> escalado x2 (INTER_CUBIC) -> denoise -> CLAHE. Cada paso
+ * intermedio es un `cv.Mat`, que vive en el heap de WASM, no en el heap de JS
+ * con garbage collector — por eso cada Mat que ya no se necesita se libera a
+ * mano con `.delete()`.
+ *
+ * A PROPÓSITO ya NO se binariza (antes terminaba en `adaptiveThreshold`):
+ * Tesseract 7 usa un motor LSTM que lee MEJOR una imagen en escala de grises
+ * limpia y la binariza internamente (Otsu). Binarizar a mano sobre tinta
+ * térmica tenue se comía trazos finos y dejaba el texto "roto" — la causa del
+ * OCR destrozado ("CENTRAL PARKING" -> "PE PAR IMG"). Se le entrega gris
+ * nítido y ampliado, y él se encarga del umbral.
  */
 function aplicarPipelineOpenCv(cv: CvModule, input: EntradaImagen): HTMLCanvasElement {
   const src = input instanceof ImageData ? cv.matFromImageData(input) : cv.imread(input)
@@ -137,65 +144,74 @@ function aplicarPipelineOpenCv(cv: CvModule, input: EntradaImagen): HTMLCanvasEl
   }
   escalado.delete()
 
+  // CLAHE (contraste adaptativo local) para levantar tinta tenue sin quemar el
+  // fondo. Este es el ÚLTIMO paso: el resultado es una imagen en grises, no
+  // binaria — ver el comentario del encabezado de la función.
   const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8))
   const conClahe = new cv.Mat()
   clahe.apply(sinRuido, conClahe)
   clahe.delete()
   sinRuido.delete()
 
-  // blockSize 21 y C 10 (antes 31/15): un umbral menos agresivo. Sobre
-  // facturas térmicas (fondo gris claro, tinta tenue) un blockSize grande +
-  // C alto se comía trazos finos de letras y dejaba el texto "roto", que es
-  // justo lo que disparaba el ruido en el OCR. blockSize DEBE ser impar.
-  const binaria = new cv.Mat()
-  cv.adaptiveThreshold(conClahe, binaria, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 21, 10)
-  conClahe.delete()
-
   const canvasSalida = document.createElement('canvas')
-  cv.imshow(canvasSalida, binaria)
-  binaria.delete()
+  cv.imshow(canvasSalida, conClahe)
+  conClahe.delete()
 
   return canvasSalida
 }
 
 /**
- * Fallback si opencv.js no carga/inicializa/expira: gris -> contraste ->
- * binarización, todo con Canvas 2D. A propósito NO reescala (a diferencia del
- * pipeline de OpenCV): un resize x2 en canvas usa interpolación bilineal
- * simple que, sobre facturas térmicas, difumina más de lo que ayuda. Se deja
- * la imagen a resolución nativa y solo se limpia el contraste.
+ * Fallback si opencv.js no carga/inicializa/expira: gris -> contraste suave,
+ * ampliado x2, todo con Canvas 2D. Igual que la rama de OpenCV, ya NO binariza
+ * a mano: le entrega grises a Tesseract y deja que él umbralice (ver el
+ * comentario de aplicarPipelineOpenCv). Amplía x2 (dibujando a un canvas del
+ * doble de tamaño con suavizado de alta calidad) para acercarse en densidad de
+ * texto a la rama de OpenCV — sobre tinta térmica tenue, más píxeles por trazo
+ * ayudan al OCR más de lo que estorba la interpolación.
  */
 function preprocesarConCanvas2D(input: EntradaImagen): HTMLCanvasElement {
   const { ancho, alto } = dimensiones(input)
+  const ESCALA = 2
+  const anchoEsc = ancho * ESCALA
+  const altoEsc = alto * ESCALA
+
   const canvas = document.createElement('canvas')
-  canvas.width = ancho
-  canvas.height = alto
+  canvas.width = anchoEsc
+  canvas.height = altoEsc
 
   const ctx = canvas.getContext('2d')
   if (!ctx) {
     throw new Error('No se pudo obtener el contexto 2D del canvas para el fallback de preprocesamiento')
   }
 
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+
   if (input instanceof ImageData) {
-    ctx.putImageData(input, 0, 0)
+    // ImageData no se puede dibujar escalado directamente: se pone a tamaño
+    // nativo en un canvas intermedio y desde ahí se escala al de salida.
+    const intermedio = document.createElement('canvas')
+    intermedio.width = ancho
+    intermedio.height = alto
+    intermedio.getContext('2d')?.putImageData(input, 0, 0)
+    ctx.drawImage(intermedio, 0, 0, anchoEsc, altoEsc)
   } else {
-    ctx.drawImage(input, 0, 0, ancho, alto)
+    ctx.drawImage(input, 0, 0, anchoEsc, altoEsc)
   }
 
-  const imageData = ctx.getImageData(0, 0, ancho, alto)
+  const imageData = ctx.getImageData(0, 0, anchoEsc, altoEsc)
   const pixeles = imageData.data
   const CONTRASTE = 1.5
   for (let i = 0; i < pixeles.length; i += 4) {
     // a) gris (luminancia ponderada)
     const gris = 0.299 * pixeles[i] + 0.587 * pixeles[i + 1] + 0.114 * pixeles[i + 2]
-    // b) contraste alrededor del punto medio
-    const conContraste = (gris - 128) * CONTRASTE + 128
-    // c) binarización dura: negro o blanco, nada intermedio. Sobre texto de
-    //    factura da un resultado más limpio para el OCR que dejar grises.
-    const binario = conContraste > 128 ? 255 : 0
-    pixeles[i] = binario
-    pixeles[i + 1] = binario
-    pixeles[i + 2] = binario
+    // b) contraste suave alrededor del punto medio, recortado a [0, 255]. NO se
+    //    binariza: se conservan los grises intermedios para que Tesseract
+    //    umbralice internamente (lee mejor grises que un blanco/negro duro).
+    const conContraste = Math.max(0, Math.min(255, (gris - 128) * CONTRASTE + 128))
+    pixeles[i] = conContraste
+    pixeles[i + 1] = conContraste
+    pixeles[i + 2] = conContraste
   }
   ctx.putImageData(imageData, 0, 0)
 

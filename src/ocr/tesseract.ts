@@ -3,6 +3,15 @@ import { TimeoutError, withTimeout } from '../utils/withTimeout'
 
 const OCR_TIMEOUT_MS = 60_000
 
+// La CREACIÓN del worker baja varios MB (worker.min.js + core WASM +
+// spa.traineddata.gz). Sin timeout, sobre una red lenta (ej. un túnel de
+// reenvío de puertos) esa descarga se estanca y el pipeline espera para
+// siempre, con la barra congelada y sin error — el bug del "se queda cargando".
+// Este timeout es GENEROSO a propósito: con el warm-up (ver
+// precalentarWorkerOCR) la descarga real corre mientras el usuario encuadra, y
+// su único fin es convertir un cuelgue infinito en un error claro y accionable.
+const CREACION_WORKER_TIMEOUT_MS = 90_000
+
 export interface OcrProgress {
   status: string
   progress: number // 0..1
@@ -79,16 +88,38 @@ function crearWorker(): Promise<Worker> {
 
 function getWorker(): Promise<Worker> {
   if (!workerPromise) {
-    workerPromise = crearWorker().catch((error: unknown) => {
-      // Si la creación falla (ej. no se pudieron cargar los assets), no
-      // dejar cacheada una promesa rota: el próximo intento debe poder
-      // volver a crear el worker desde cero en vez de quedar roto para
-      // siempre hasta recargar la página.
+    // withTimeout sobre la creación: si la descarga de los assets se estanca,
+    // falla con un mensaje claro en vez de colgarse indefinidamente.
+    workerPromise = withTimeout(
+      crearWorker(),
+      CREACION_WORKER_TIMEOUT_MS,
+      `El worker de OCR no se creó en ${CREACION_WORKER_TIMEOUT_MS / 1000}s (¿descarga de modelos muy lenta?)`,
+    ).catch((error: unknown) => {
+      // Si la creación falla o expira, no dejar cacheada una promesa rota: el
+      // próximo intento debe poder volver a crear el worker desde cero en vez
+      // de quedar roto para siempre hasta recargar la página.
       workerPromise = null
       throw error
     })
   }
   return workerPromise
+}
+
+/**
+ * Precalienta el worker (crea el singleton si aún no existe) para que la
+ * descarga pesada de modelos ocurra AHORA — típicamente al abrir la pantalla de
+ * captura, en paralelo con la cámara, mientras el usuario encuadra — y no al
+ * momento de la primera captura. Traga el error a propósito: si el warm-up
+ * falla, no debe romper el montaje de la pantalla; el error real (y visible en
+ * la UI) volverá a surgir cuando reconocerTexto() intente usar el worker.
+ */
+export function precalentarWorkerOCR(): Promise<void> {
+  return getWorker().then(
+    () => undefined,
+    (error: unknown) => {
+      console.warn('[ocr] warm-up del worker falló (se reintentará al capturar):', error)
+    },
+  )
 }
 
 /**

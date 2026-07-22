@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import { useNavigate, useParams } from 'react-router-dom'
 import { db } from '../db/db'
 import { preprocess } from '../ocr/preprocess'
-import { reconocerTexto, terminarWorkerOCR } from '../ocr/tesseract'
+import { precalentarWorkerOCR, reconocerTexto, terminarWorkerOCR } from '../ocr/tesseract'
 import { reconcile } from '../parser/reconcile'
 
 // Estados explícitos del pipeline por foto, para que la UI siempre muestre
@@ -124,6 +124,11 @@ export function Capture() {
   useEffect(() => {
     let cancelado = false
 
+    // Warm-up del worker de OCR en paralelo con la cámara: baja los MB del
+    // modelo mientras el usuario encuadra, así la primera captura no arranca la
+    // descarga desde cero (causa del "se queda cargando" sobre redes lentas).
+    void precalentarWorkerOCR()
+
     async function iniciarCamara() {
       if (!navigator.mediaDevices?.getUserMedia) {
         console.warn('[capture] getUserMedia no está disponible; usando respaldo de archivo')
@@ -134,8 +139,12 @@ export function Capture() {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            // Se pide alta resolución para que el recorte de la tirilla llegue
+            // con más detalle al OCR (tinta térmica tenue necesita píxeles). Es
+            // `ideal`, no `exact`: un teléfono que no lo soporte cae a lo que
+            // pueda sin romper getUserMedia.
+            width: { ideal: 2560 },
+            height: { ideal: 1440 },
           },
           audio: false,
         })
@@ -226,6 +235,11 @@ export function Capture() {
         console.error(`[capture] error tras ${Math.round(performance.now() - inicioTotal)}ms procesando el recibo:`, err)
         setEstado('error')
         setError(err instanceof Error ? err.message : 'Error desconocido procesando la foto')
+      } finally {
+        // Reanudar el preview en vivo para reencuadrar el siguiente recibo (si
+        // se había pausado al capturar). No-op en el respaldo de <input file>,
+        // donde no hay <video> montado.
+        void videoRef.current?.play().catch(() => {})
       }
     },
     [sessionId],
@@ -239,6 +253,12 @@ export function Capture() {
     try {
       console.log('[capture] capturando frame de la cámara en vivo')
       const canvasRecortado = recortarFrameDeVideo(video)
+      // Congelar el preview AL INSTANTE: el frame ya se tomó (drawImage de
+      // arriba es síncrono), así que se pausa el <video> para que quede
+      // mostrando la foto capturada. Feedback claro de "ya se tomó, puedes
+      // moverte" mientras corre el OCR. Se reanuda en procesarImagen() al
+      // terminar (éxito o error), para reencuadrar el siguiente recibo.
+      video.pause()
       const blob = await canvasABlob(canvasRecortado)
       console.log('[capture] frame recortado:', canvasRecortado.width, 'x', canvasRecortado.height, blob.size, 'bytes')
       await procesarImagen(canvasRecortado, blob)
@@ -268,9 +288,9 @@ export function Capture() {
 
   const mensajeEstado: Record<Estado, string> = {
     idle: 'Encuadra la tirilla dentro del recuadro y toca "Capturar".',
-    preprocesando: 'Cargando OpenCV y mejorando la imagen...',
-    ocr: 'Reconociendo texto (OCR)...',
-    parseando: 'Extrayendo los datos de la factura...',
+    preprocesando: 'Foto tomada, procesando (mejorando la imagen)… ya puedes moverte.',
+    ocr: 'Foto tomada, reconociendo texto (OCR)… ya puedes moverte.',
+    parseando: 'Foto tomada, extrayendo los datos de la factura…',
     listo: '¡Recibo guardado! Puedes capturar otro.',
     error: 'Algo falló procesando esta foto.',
   }
