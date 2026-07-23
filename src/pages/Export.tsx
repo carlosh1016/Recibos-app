@@ -45,7 +45,7 @@ export function Export() {
 
       {error && (
         <p className="mt-4 rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">
-          {error} (esperado por ahora: excel/export.ts todavía es un stub, ver TODOs ahí).
+          {error}
         </p>
       )}
     </div>

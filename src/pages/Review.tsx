@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { db } from '../db/db'
 import type { ExtractedData, FormaPago, Receipt, ReceiptStatus } from '../types'
 import { calcularDV } from '../utils/dv'
@@ -112,6 +112,7 @@ function Campo({ label, value, onChange, resaltar, placeholder, inputMode }: Cam
 
 export function Review() {
   const { sessionId } = useParams<{ sessionId: string }>()
+  const navigate = useNavigate()
   const [receipts, setReceipts] = useState<Receipt[]>([])
   const [idx, setIdx] = useState(0)
   const [form, setForm] = useState<FormState | null>(null)
@@ -262,8 +263,24 @@ export function Review() {
             Sesión #{sessionId} — {receipts.length} recibo(s), {pendientes} sin revisar
           </p>
         </div>
-        {receiptActual && <Badge status={receiptActual.status} />}
+        <div className="flex items-center gap-2">
+          {receiptActual && <Badge status={receiptActual.status} />}
+          <button
+            type="button"
+            onClick={() => navigate(`/export/${sessionId}`)}
+            className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+          >
+            Exportar a Excel
+          </button>
+        </div>
       </div>
+
+      {pendientes > 0 && (
+        <p className="mt-2 rounded bg-yellow-50 px-2 py-1.5 text-xs text-yellow-800">
+          Aún hay {pendientes} recibo(s) sin revisar. Puedes exportar igual, pero conviene
+          revisarlos antes para que los datos salgan correctos.
+        </p>
+      )}
 
       {/* Tira de miniaturas/estado para saltar entre recibos */}
       <div className="mt-4 flex flex-wrap gap-1">
