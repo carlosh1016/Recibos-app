@@ -30,8 +30,8 @@ export default defineConfig({
         name: 'Recibos App',
         short_name: 'Recibos',
         description: 'Procesa fotos de facturas colombianas y expórtalas a Excel, 100% offline.',
-        theme_color: '#2563eb',
-        background_color: '#2563eb',
+        theme_color: '#1b4fd8',
+        background_color: '#1b4fd8',
         display: 'standalone',
         start_url: '/',
         icons: [

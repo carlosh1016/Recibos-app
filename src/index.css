@@ -7,3 +7,11 @@ body,
 #root {
   height: 100%;
 }
+
+body {
+  /* Mismo fondo que el cascarón de pantalla (Screen.tsx). Sin esto, el rebote
+     del scroll en móvil deja ver una franja blanca sobre el gris. */
+  background-color: theme('colors.slate.50');
+  color: theme('colors.slate.900');
+  -webkit-tap-highlight-color: transparent;
+}

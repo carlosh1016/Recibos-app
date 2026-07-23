@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Button, ESTILO_ESTADO, Field, Screen, StatusBadge } from '../components'
 import { db } from '../db/db'
-import type { ExtractedData, FormaPago, Receipt, ReceiptStatus } from '../types'
+import type { ExtractedData, FormaPago, Receipt } from '../types'
 import { calcularDV } from '../utils/dv'
 
 // Margen (en pesos) con el que se considera que base+iva "cuadra" con el
@@ -70,45 +71,10 @@ function receiptAForm(data: ExtractedData): FormState {
   }
 }
 
-// --- Badge de estado -------------------------------------------------------
-const BADGE: Record<ReceiptStatus, { texto: string; clases: string }> = {
-  ok: { texto: 'OK', clases: 'bg-green-100 text-green-800 border-green-300' },
-  review: { texto: 'Revisar', clases: 'bg-yellow-100 text-yellow-800 border-yellow-300' },
-  error: { texto: 'Error', clases: 'bg-red-100 text-red-800 border-red-300' },
-}
-
-function Badge({ status }: { status: ReceiptStatus }) {
-  const b = BADGE[status]
-  return <span className={`rounded border px-2 py-0.5 text-xs font-medium ${b.clases}`}>{b.texto}</span>
-}
-
-// --- Campo de formulario reutilizable --------------------------------------
-interface CampoProps {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  resaltar?: boolean
-  placeholder?: string
-  inputMode?: 'text' | 'numeric' | 'decimal'
-}
-
-function Campo({ label, value, onChange, resaltar, placeholder, inputMode }: CampoProps) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium text-gray-600">{label}</span>
-      <input
-        type="text"
-        inputMode={inputMode}
-        value={value}
-        placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
-        className={`w-full rounded border px-2 py-1.5 text-sm outline-none focus:border-brand-500 ${
-          resaltar ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
-        }`}
-      />
-    </label>
-  )
-}
+const pesos = (n: number | undefined): string =>
+  n === undefined
+    ? '—'
+    : n.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 2 })
 
 export function Review() {
   const { sessionId } = useParams<{ sessionId: string }>()
@@ -170,6 +136,18 @@ export function Review() {
     const hayDiscrepancia = totalCalc !== undefined && total !== undefined && Math.abs(totalCalc - total) > MARGEN_CUADRE
     return { base, pct, ivaMonto, total, totalCalc, hayDiscrepancia }
   }, [form])
+
+  // El DV se muestra en vivo (solo lectura): se recalcula del NIT igual que al
+  // guardar, así la usuaria ve de una si tecleó mal el NIT.
+  const dvPreview = useMemo(() => {
+    const digitos = form?.nit.replace(/\D/g, '') ?? ''
+    if (digitos.length < 1 || digitos.length > 15) return ''
+    try {
+      return calcularDV(digitos)
+    } catch {
+      return ''
+    }
+  }, [form?.nit])
 
   /** Índice del próximo recibo con status != 'ok' (a partir de `desde`, con wrap). */
   function proximoSinRevisar(lista: Receipt[], desde: number): number | null {
@@ -243,56 +221,50 @@ export function Review() {
   }
 
   const pendientes = receipts.filter((r) => r.status !== 'ok').length
+  const revisadas = receipts.length - pendientes
 
   if (receipts.length === 0) {
     return (
-      <div className="mx-auto max-w-2xl p-6">
-        <h1 className="text-xl font-semibold text-brand-700">Revisar recibos</h1>
-        <p className="mt-1 text-sm text-gray-600">Sesión #{sessionId}</p>
-        <p className="mt-6 text-sm text-gray-500">Todavía no hay recibos en esta sesión.</p>
-      </div>
+      <Screen titulo="Revisar facturas" volverA={`/capture/${sessionId}`} ancho="md">
+        <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
+          <p className="text-sm text-slate-500">Todavía no hay facturas en esta sesión.</p>
+          <Button className="mt-4" onClick={() => navigate(`/capture/${sessionId}`)}>
+            Capturar la primera
+          </Button>
+        </div>
+      </Screen>
     )
   }
 
   return (
-    <div className="mx-auto max-w-4xl p-4 sm:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold text-brand-700">Revisar recibos</h1>
-          <p className="mt-1 text-sm text-gray-600">
-            Sesión #{sessionId} — {receipts.length} recibo(s), {pendientes} sin revisar
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {receiptActual && <Badge status={receiptActual.status} />}
-          <button
-            type="button"
-            onClick={() => navigate(`/export/${sessionId}`)}
-            className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
-          >
-            Exportar a Excel
-          </button>
-        </div>
+    <Screen
+      titulo="Revisar facturas"
+      subtitulo={`${revisadas} de ${receipts.length} revisadas`}
+      volverA={`/capture/${sessionId}`}
+      ancho="4xl"
+      accion={receiptActual && <StatusBadge status={receiptActual.status} />}
+    >
+      {/* Progreso de revisión: el estado global de la tarea, siempre visible. */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+        <div
+          className="h-full rounded-full bg-green-500 transition-all duration-300"
+          style={{ width: `${(revisadas / receipts.length) * 100}%` }}
+        />
       </div>
 
-      {pendientes > 0 && (
-        <p className="mt-2 rounded bg-yellow-50 px-2 py-1.5 text-xs text-yellow-800">
-          Aún hay {pendientes} recibo(s) sin revisar. Puedes exportar igual, pero conviene
-          revisarlos antes para que los datos salgan correctos.
-        </p>
-      )}
-
-      {/* Tira de miniaturas/estado para saltar entre recibos */}
-      <div className="mt-4 flex flex-wrap gap-1">
+      {/* Tira para saltar entre facturas. El número + color dice el estado de
+          cada una sin abrirla. */}
+      <div className="mt-3 flex flex-wrap gap-1.5">
         {receipts.map((r, i) => (
           <button
             key={r.id}
             type="button"
             onClick={() => setIdx(i)}
-            className={`h-8 w-8 rounded border text-xs font-medium ${
-              i === idx ? 'ring-2 ring-brand-500 ' : ''
-            }${BADGE[r.status].clases}`}
-            title={`Recibo #${r.id} — ${r.status}`}
+            className={`h-9 w-9 rounded-lg border text-xs font-semibold transition-transform ${
+              ESTILO_ESTADO[r.status].tarjeta
+            } ${i === idx ? 'ring-2 ring-brand-500 ring-offset-1' : 'hover:scale-105'}`}
+            aria-current={i === idx ? 'true' : undefined}
+            title={`Factura ${i + 1} — ${ESTILO_ESTADO[r.status].texto}`}
           >
             {i + 1}
           </button>
@@ -300,119 +272,167 @@ export function Review() {
       </div>
 
       {receiptActual && form && (
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,340px)_1fr]">
           {/* Foto */}
-          <div className="rounded border border-gray-200 bg-gray-50 p-2">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
             {photoUrl ? (
-              <img src={photoUrl} alt={`Recibo ${idx + 1}`} className="max-h-[70vh] w-full rounded object-contain" />
+              <img
+                src={photoUrl}
+                alt={`Factura ${idx + 1}`}
+                className="max-h-[60vh] w-full object-contain md:max-h-[70vh]"
+              />
             ) : (
-              <p className="p-4 text-sm text-gray-400">Cargando foto…</p>
+              <p className="p-8 text-center text-sm text-slate-400">Cargando foto…</p>
             )}
           </div>
 
           {/* Formulario */}
-          <div className="space-y-3">
-            <Campo label="Razón social" value={form.razonSocial} onChange={(v) => setCampo('razonSocial', v)} />
-            <div className="grid grid-cols-2 gap-3">
-              <Campo label="NIT" value={form.nit} onChange={(v) => setCampo('nit', v)} inputMode="numeric" />
-              <Campo label="Número de factura" value={form.numero} onChange={(v) => setCampo('numero', v)} />
-            </div>
-            <Campo
-              label="Fecha (YYYY-MM-DD)"
-              value={form.fecha}
-              onChange={(v) => setCampo('fecha', v)}
-              placeholder="2026-07-17"
+          <div className="flex flex-col gap-3">
+            <Field
+              label="Razón social"
+              value={form.razonSocial}
+              onChange={(e) => setCampo('razonSocial', e.target.value)}
+              placeholder="Nombre del proveedor"
             />
 
-            <div className="grid grid-cols-3 gap-3">
-              <Campo
-                label="Base (VALOR)"
-                value={form.valorBase}
-                onChange={(v) => setCampo('valorBase', v)}
-                inputMode="decimal"
-                resaltar={calc.hayDiscrepancia}
+            <div className="grid grid-cols-[1fr_auto] gap-3">
+              <Field
+                label="NIT"
+                value={form.nit}
+                onChange={(e) => setCampo('nit', e.target.value)}
+                inputMode="numeric"
+                mono
               />
-              <Campo
+              {/* El DV no se edita: se deriva del NIT (módulo 11 de la DIAN), y
+                  dejarlo editable solo permitiría guardar una combinación
+                  inválida. */}
+              <label className="block w-20">
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                  DV
+                </span>
+                <input
+                  type="text"
+                  value={dvPreview}
+                  readOnly
+                  tabIndex={-1}
+                  aria-label="Dígito de verificación (calculado)"
+                  className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2.5 text-center font-mono text-base text-slate-500"
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field
+                label="N.º de factura"
+                value={form.numero}
+                onChange={(e) => setCampo('numero', e.target.value)}
+                mono
+              />
+              {/* type="date" abre el selector nativo del celular en vez de
+                  obligar a teclear "2026-07-17" a mano. */}
+              <Field
+                label="Fecha"
+                type="date"
+                value={form.fecha}
+                onChange={(e) => setCampo('fecha', e.target.value)}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <Field
+                label="Base"
+                value={form.valorBase}
+                onChange={(e) => setCampo('valorBase', e.target.value)}
+                inputMode="decimal"
+                tono={calc.hayDiscrepancia ? 'alerta' : 'normal'}
+              />
+              <Field
                 label="% IVA"
                 value={form.porcentajeIva}
-                onChange={(v) => setCampo('porcentajeIva', v)}
+                onChange={(e) => setCampo('porcentajeIva', e.target.value)}
                 inputMode="decimal"
-                resaltar={calc.hayDiscrepancia}
+                tono={calc.hayDiscrepancia ? 'alerta' : 'normal'}
               />
-              <Campo
+              <Field
                 label="Total"
                 value={form.total}
-                onChange={(v) => setCampo('total', v)}
+                onChange={(e) => setCampo('total', e.target.value)}
                 inputMode="decimal"
-                resaltar={calc.hayDiscrepancia}
+                tono={calc.hayDiscrepancia ? 'alerta' : 'normal'}
               />
             </div>
 
             {calc.hayDiscrepancia && (
-              <p className="rounded bg-yellow-50 px-2 py-1.5 text-xs text-yellow-800">
-                Base + IVA ={' '}
-                {calc.totalCalc?.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 2 })}{' '}
-                no coincide con el Total{' '}
-                {calc.total?.toLocaleString('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 2 })}.
-                Corrige el campo mal leído.
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Base + IVA = <strong>{pesos(calc.totalCalc)}</strong> no coincide con el total{' '}
+                <strong>{pesos(calc.total)}</strong>. Corrige el campo mal leído.
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="mb-1 block text-xs font-medium text-gray-600">Forma de pago</span>
-                <select
-                  value={form.formaPago}
-                  onChange={(e) => setCampo('formaPago', e.target.value as FormState['formaPago'])}
-                  className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm outline-none focus:border-brand-500"
-                >
-                  <option value="">—</option>
-                  <option value="contado">Contado</option>
-                  <option value="credito">Crédito</option>
-                </select>
-              </label>
-            </div>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">
+                Forma de pago
+              </span>
+              <select
+                value={form.formaPago}
+                onChange={(e) => setCampo('formaPago', e.target.value as FormState['formaPago'])}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-base text-slate-900 outline-none transition-colors focus:border-brand-500 focus:ring-2 focus:ring-brand-500/30"
+              >
+                <option value="">Sin especificar</option>
+                <option value="contado">Contado</option>
+                <option value="credito">Crédito</option>
+              </select>
+            </label>
 
-            <Campo label="Concepto" value={form.concepto} onChange={(v) => setCampo('concepto', v)} />
+            <Field
+              label="Concepto"
+              value={form.concepto}
+              onChange={(e) => setCampo('concepto', e.target.value)}
+              placeholder="Producto o servicio"
+            />
 
-            <div className="flex gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => void marcarRevisado()}
-                disabled={guardando}
-                className="flex-1 rounded bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-              >
-                {guardando ? 'Guardando…' : 'Marcar revisado'}
-              </button>
-              <button
-                type="button"
-                onClick={irSiguiente}
-                disabled={guardando}
-                className="rounded border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                Siguiente
-              </button>
-              <button
-                type="button"
-                onClick={() => void descartarRecibo()}
-                disabled={guardando}
-                title="Descartar este recibo"
-                className="rounded border border-red-300 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                Descartar
-              </button>
+            {/* Un solo primario. "Siguiente" es secundario y "Descartar" no
+                tiene fondo, para que nunca compitan con la acción real. */}
+            <div className="mt-2 flex flex-col gap-2">
+              <Button fullWidth onClick={() => void marcarRevisado()} disabled={guardando}>
+                {guardando ? 'Guardando…' : 'Marcar revisada'}
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="secondary" fullWidth onClick={irSiguiente} disabled={guardando}>
+                  Siguiente
+                </Button>
+                <Button variant="danger" onClick={() => void descartarRecibo()} disabled={guardando}>
+                  Descartar
+                </Button>
+              </div>
             </div>
 
             {/* Texto crudo del OCR, colapsable, para depurar lecturas raras. */}
-            <details className="mt-2">
-              <summary className="cursor-pointer text-xs text-gray-400">Ver texto OCR crudo</summary>
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs text-gray-600">
+            <details className="mt-1">
+              <summary className="cursor-pointer text-xs text-slate-400">Ver texto crudo de la extracción</summary>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-100 p-2 text-xs text-slate-600">
                 {receiptActual.rawOCRText || '(vacío)'}
               </pre>
             </details>
           </div>
         </div>
       )}
-    </div>
+
+      {/* Exportar cierra el flujo: va al final, después de revisar. */}
+      <div className="mt-6 border-t border-slate-200 pt-4">
+        {pendientes > 0 && (
+          <p className="mb-2 text-center text-xs text-slate-500">
+            Quedan {pendientes} factura{pendientes === 1 ? '' : 's'} sin revisar.
+          </p>
+        )}
+        <Button
+          variant="secondary"
+          fullWidth
+          onClick={() => navigate(`/export/${sessionId}`)}
+        >
+          Exportar a Excel
+        </Button>
+      </div>
+    </Screen>
   )
 }

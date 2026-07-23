@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Button, ProgressBar, Screen } from '../components'
 import { db } from '../db/db'
 import { preprocess } from '../ocr/preprocess'
 import { precalentarWorkerOCR, reconocerTexto, terminarWorkerOCR } from '../ocr/tesseract'
@@ -14,6 +15,12 @@ type Estado = 'idle' | 'llm' | 'preprocesando' | 'ocr' | 'parseando' | 'listo' |
 // Estado de la cámara en vivo (getUserMedia). Si el dispositivo/permiso no la
 // deja usar, se cae a un <input type=file> como respaldo (ver más abajo).
 type EstadoCamara = 'iniciando' | 'activa' | 'no-disponible'
+
+// Qué motor leyó el ÚLTIMO recibo. La app cae de la ruta IA a Tesseract en
+// silencio cuando el proxy falla, y eso confundía: los datos salían peores sin
+// ninguna señal visible de por qué. Mostrarlo convierte el fallback en
+// información en vez de en un misterio.
+type Motor = 'ia' | 'ocr'
 
 // Rangos de la barra global (0-100), uno por etapa. `preprocesando` cubre
 // TANTO la carga de opencv.js como el pipeline en sí (ver el onProgress de
@@ -114,6 +121,7 @@ export function Capture() {
   const [progresoGlobal, setProgresoGlobal] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [recibosCapturados, setRecibosCapturados] = useState(0)
+  const [motor, setMotor] = useState<Motor | null>(null)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -220,6 +228,7 @@ export function Capture() {
 
             setProgresoGlobal(100)
             setEstado('listo')
+            setMotor('ia')
             setRecibosCapturados((n) => n + 1)
             return
           } catch (llmErr) {
@@ -264,6 +273,7 @@ export function Capture() {
 
         setProgresoGlobal(100)
         setEstado('listo')
+        setMotor('ocr')
         setRecibosCapturados((n) => n + 1)
       } catch (err) {
         console.error(`[capture] error tras ${Math.round(performance.now() - inicioTotal)}ms procesando el recibo:`, err)
@@ -331,17 +341,23 @@ export function Capture() {
   }
 
   return (
-    <div className="mx-auto max-w-md p-6">
-      <h1 className="text-xl font-semibold text-brand-700">Capturar recibos</h1>
-      <p className="mt-1 text-sm text-gray-600">Sesión #{sessionId}</p>
-
+    <Screen
+      titulo="Capturar facturas"
+      subtitulo="Encuadra la tirilla y toca Capturar"
+      volverA="/"
+      accion={
+        <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+          {recibosCapturados} foto{recibosCapturados === 1 ? '' : 's'}
+        </span>
+      }
+    >
       {estadoCamara !== 'no-disponible' ? (
         <>
           {/* Cámara EN VIVO: el <video> se muestra a su aspecto natural (sin
               object-fit que recorte), así el recuadro guía en % mapea 1:1 al
               frame que se recorta. El recuadro NO es decorativo: delimita
               exactamente la región que se le pasa al OCR. */}
-          <div className="relative mt-6 overflow-hidden rounded-lg bg-black">
+          <div className="relative overflow-hidden rounded-xl bg-black">
             <video
               ref={videoRef}
               autoPlay
@@ -378,31 +394,31 @@ export function Capture() {
             </p>
           </div>
 
-          <button
-            type="button"
+          <Button
+            fullWidth
+            className="mt-4"
             onClick={() => void capturarDesdeCamara()}
             disabled={procesando || estadoCamara !== 'activa'}
-            className="mt-4 w-full rounded bg-brand-600 px-4 py-3 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50"
           >
             {procesando ? 'Procesando…' : 'Capturar'}
-          </button>
+          </Button>
         </>
       ) : (
         // Respaldo cuando no hay cámara en vivo (escritorio, permiso negado):
         // <input type=file>. capture="environment" sugiere la cámara trasera
         // en móviles que lleguen hasta acá.
-        <label className={`mt-6 block ${procesando ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+        <label className={`block ${procesando ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
           <div
-            className={`relative mx-auto flex w-full max-w-[220px] items-center justify-center rounded-lg border-2 border-dashed ${
-              procesando ? 'border-gray-200 bg-gray-50' : 'border-brand-400 bg-brand-50/40'
+            className={`relative mx-auto flex w-full max-w-[220px] items-center justify-center rounded-xl border-2 border-dashed ${
+              procesando ? 'border-slate-200 bg-slate-100' : 'border-brand-400 bg-brand-50'
             }`}
             style={{ aspectRatio: '3 / 4' }}
           >
-            <p className={`px-4 text-center text-sm font-medium ${procesando ? 'text-gray-400' : 'text-brand-700'}`}>
+            <p className={`px-4 text-center text-sm font-medium ${procesando ? 'text-slate-400' : 'text-brand-700'}`}>
               {procesando ? 'Procesando…' : 'Toca para tomar la foto de la tirilla'}
             </p>
           </div>
-          <span className="mt-2 block text-center text-sm text-gray-500">
+          <span className="mt-2 block text-center text-sm text-slate-500">
             {procesando ? '' : 'La cámara en vivo no está disponible en este dispositivo'}
           </span>
           <input
@@ -417,38 +433,51 @@ export function Capture() {
       )}
 
       <div
-        className={`mt-4 rounded p-3 text-sm ${
+        className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
           estado === 'error'
-            ? 'bg-red-50 text-red-700'
+            ? 'border-red-200 bg-red-50 text-red-700'
             : estado === 'listo'
-              ? 'bg-green-50 text-green-700'
-              : 'bg-gray-50 text-gray-600'
+              ? 'border-green-200 bg-green-50 text-green-800'
+              : 'border-slate-200 bg-white text-slate-600'
         }`}
       >
         <p>{mensajeEstado[estado]}</p>
 
         {(procesando || estado === 'error') && (
-          <div className="mt-2 h-2 w-full rounded bg-gray-200">
-            <div
-              className={`h-2 rounded transition-all ${estado === 'error' ? 'bg-red-500' : 'bg-brand-600'}`}
-              style={{ width: `${Math.round(progresoGlobal)}%` }}
-            />
+          <div className="mt-2">
+            <ProgressBar valor={progresoGlobal} tono={estado === 'error' ? 'error' : 'progreso'} />
           </div>
         )}
 
-        {estado === 'error' && error && <p className="mt-1 font-mono text-xs">{error}</p>}
+        {/* Qué motor leyó la última factura: la IA es mucho más precisa, así que
+            si aparece "OCR local" la usuaria sabe que puede haber más que
+            corregir en Revisar (y que quizá se cayó internet). */}
+        {estado === 'listo' && motor && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs font-medium">
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${motor === 'ia' ? 'bg-green-500' : 'bg-amber-500'}`}
+              aria-hidden="true"
+            />
+            {motor === 'ia' ? 'Leída con IA' : 'Leída con OCR local — revisa los datos con cuidado'}
+          </p>
+        )}
+
+        {estado === 'error' && error && <p className="mt-2 font-mono text-xs">{error}</p>}
       </div>
 
-      <p className="mt-4 text-sm text-gray-600">Recibos capturados en esta sesión: {recibosCapturados}</p>
-
-      <button
-        type="button"
-        onClick={() => navigate(`/review/${sessionId}`)}
-        disabled={procesando}
-        className="mt-2 w-full rounded bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-      >
-        Ir a revisar
-      </button>
-    </div>
+      {/* Solo aparece cuando ya hay algo que revisar: un botón que no lleva a
+          ninguna parte es ruido en la pantalla más usada de la app. */}
+      {recibosCapturados > 0 && (
+        <Button
+          variant="secondary"
+          fullWidth
+          className="mt-4"
+          onClick={() => navigate(`/review/${sessionId}`)}
+          disabled={procesando}
+        >
+          Revisar {recibosCapturados} factura{recibosCapturados === 1 ? '' : 's'}
+        </Button>
+      )}
+    </Screen>
   )
 }
