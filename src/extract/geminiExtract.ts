@@ -12,14 +12,22 @@ import { withTimeout } from '../utils/withTimeout'
 // local. Por eso las funciones acá nunca "arreglan" el error: lo propagan para
 // que Capture decida usar el fallback.
 
-const PROXY_URL = import.meta.env.VITE_LLM_PROXY_URL
+// URL del proxy. Si el build NO define VITE_LLM_PROXY_URL, se usa la ruta del
+// MISMO dominio '/api/extract' — que es la función serverless de Vercel
+// (api/extract.ts). En local se puede apuntar a wrangler con
+// VITE_LLM_PROXY_URL=http://localhost:8787 (ver .env).
+const PROXY_URL = import.meta.env.VITE_LLM_PROXY_URL || '/api/extract'
 const PROXY_TOKEN = import.meta.env.VITE_LLM_PROXY_TOKEN
 const LLM_TIMEOUT_MS = 30_000
 const MARGEN_CUADRE = 1 // pesos; mismo criterio que el parser (reconcile.ts)
 
-/** Hay ruta LLM disponible solo si el build trae URL y token del proxy. */
+/**
+ * Hay ruta LLM disponible si el build trae el token del proxy. La URL siempre
+ * tiene un valor (por defecto '/api/extract'), así que basta con el token: sin
+ * él el endpoint responde 401 y no tendría sentido intentar la ruta LLM.
+ */
 export function llmDisponible(): boolean {
-  return Boolean(PROXY_URL && PROXY_TOKEN)
+  return Boolean(PROXY_TOKEN)
 }
 
 /** Campos crudos tal cual los devuelve el proxy (cualquiera puede ser null). */
@@ -138,8 +146,8 @@ function construirResultado(campos: CamposLLM): { data: ExtractedData; status: R
 export async function extraerConLLM(
   blob: Blob,
 ): Promise<{ data: ExtractedData; status: ReceiptStatus; raw: string }> {
-  if (!PROXY_URL || !PROXY_TOKEN) {
-    throw new Error('Ruta LLM no configurada (falta VITE_LLM_PROXY_URL / VITE_LLM_PROXY_TOKEN)')
+  if (!PROXY_TOKEN) {
+    throw new Error('Ruta LLM no configurada (falta VITE_LLM_PROXY_TOKEN)')
   }
 
   const imageBase64 = await blobABase64(blob)
