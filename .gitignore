@@ -29,6 +29,10 @@ public/tesseract/
 proxy/.dev.vars
 proxy/node_modules
 
+# Caché y bundles temporales que genera `wrangler dev` al correr el proxy en
+# local. Son artefactos de build, no fuente.
+proxy/.wrangler
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

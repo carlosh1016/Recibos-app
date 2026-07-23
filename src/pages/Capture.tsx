@@ -122,12 +122,31 @@ export function Capture() {
   const [error, setError] = useState<string | null>(null)
   const [recibosCapturados, setRecibosCapturados] = useState(0)
   const [motor, setMotor] = useState<Motor | null>(null)
+  const [nombreSesion, setNombreSesion] = useState<string | null>(null)
 
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
 
   const procesando =
     estado === 'llm' || estado === 'preprocesando' || estado === 'ocr' || estado === 'parseando'
+
+  // El contador arranca con las facturas que YA tiene la sesión, no en cero: al
+  // volver a una sesión vieja los recibos siguen en IndexedDB, y si el contador
+  // dijera 0 el botón de revisar no aparecería y la sesión se vería vacía
+  // aunque tuviera todo su trabajo guardado.
+  useEffect(() => {
+    async function cargarSesion() {
+      if (!sessionId) return
+      const id = Number(sessionId)
+      const [sesion, cuantos] = await Promise.all([
+        db.sessions.get(id),
+        db.receipts.where('sessionId').equals(id).count(),
+      ])
+      setNombreSesion(sesion?.name ?? null)
+      setRecibosCapturados(cuantos)
+    }
+    void cargarSesion()
+  }, [sessionId])
 
   // Arranca la cámara trasera en vivo. Si falla (sin permiso, sin cámara, o
   // navegador de escritorio), se cae al respaldo de <input type=file>.
@@ -343,11 +362,11 @@ export function Capture() {
   return (
     <Screen
       titulo="Capturar facturas"
-      subtitulo="Encuadra la tirilla y toca Capturar"
+      subtitulo={nombreSesion ?? 'Encuadra la tirilla y toca Capturar'}
       volverA="/"
       accion={
         <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
-          {recibosCapturados} foto{recibosCapturados === 1 ? '' : 's'}
+          {recibosCapturados} guardada{recibosCapturados === 1 ? '' : 's'}
         </span>
       }
     >
