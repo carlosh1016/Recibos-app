@@ -5,11 +5,9 @@
 // proxy serverless, nunca en el cliente. Ver .env.example y proxy/README.md.
 interface ImportMetaEnv {
   // URL del proxy serverless que reenvía la imagen a Gemini. Si está vacía, la
-  // app usa solo el pipeline offline de Tesseract (sin ruta LLM).
+  // app usa la ruta del mismo dominio (/api/extract, /api/login) — solo hace
+  // falta ponerla en dev local para apuntar a `wrangler dev`.
   readonly VITE_LLM_PROXY_URL?: string
-  // Token compartido que el proxy exige para no dejar que cualquiera gaste la
-  // cuota. No es un secreto fuerte (va en el bundle), solo una barrera básica.
-  readonly VITE_LLM_PROXY_TOKEN?: string
 }
 
 interface ImportMeta {

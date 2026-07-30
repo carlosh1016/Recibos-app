@@ -2,8 +2,9 @@ name = "recibos-proxy"
 main = "src/worker.ts"
 compatibility_date = "2024-11-01"
 
-# Variables NO secretas. Los secretos (GEMINI_API_KEY, APP_SHARED_TOKEN) se
-# cargan aparte con `wrangler secret put ...` — NO van aquí ni en el repo.
+# Variables NO secretas. Los secretos (GEMINI_API_KEY, APP_PASSWORD,
+# APP_AUTH_SECRET) se cargan aparte con `wrangler secret put ...` — NO van
+# aquí ni en el repo.
 [vars]
 # gemini-flash-latest = alias estable al flash actual (hoy resuelve a
 # gemini-3.6-flash). gemini-2.5-flash quedó bloqueado para cuentas nuevas.

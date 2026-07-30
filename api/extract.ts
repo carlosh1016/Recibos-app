@@ -7,8 +7,10 @@
 //
 // La clave de Gemini vive como variable de entorno de Vercel
 // (GEMINI_API_KEY, SIN el prefijo VITE_ → nunca se empaqueta en el navegador).
-// El endpoint exige el token compartido (APP_SHARED_TOKEN) como barrera básica
-// anti-abuso de la cuota gratuita.
+// El endpoint exige un token de sesión (emitido por api/login.ts tras validar
+// la contraseña compartida — ver api/_lib/authToken.ts) como Bearer token.
+
+import { verifyToken } from './_lib/authToken'
 
 export const config = { runtime: 'edge' }
 
@@ -72,10 +74,12 @@ export default async function handler(request: Request): Promise<Response> {
     return json({ error: 'Método no permitido; usa POST /api/extract' }, 405)
   }
 
-  // Token compartido (barrera anti-abuso de cuota)
-  const token = process.env.APP_SHARED_TOKEN
+  // Token de sesión (ver api/login.ts): el servidor no guarda nada, solo
+  // recalcula la firma HMAC y confirma que no haya expirado.
+  const secreto = process.env.APP_AUTH_SECRET
   const auth = request.headers.get('Authorization') || ''
-  if (!token || auth !== `Bearer ${token}`) {
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+  if (!secreto || !bearer || !(await verifyToken(bearer, secreto))) {
     return json({ error: 'No autorizado' }, 401)
   }
 
