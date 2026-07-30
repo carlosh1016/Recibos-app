@@ -1,3 +1,4 @@
+import { getToken, isTokenValid } from '../auth/authToken'
 import type { ExtractedData, FormaPago } from '../types/extractedData'
 import type { ReceiptStatus } from '../types/receipt'
 import { calcularDV } from '../utils/dv'
@@ -17,17 +18,16 @@ import { withTimeout } from '../utils/withTimeout'
 // (api/extract.ts). En local se puede apuntar a wrangler con
 // VITE_LLM_PROXY_URL=http://localhost:8787 (ver .env).
 const PROXY_URL = import.meta.env.VITE_LLM_PROXY_URL || '/api/extract'
-const PROXY_TOKEN = import.meta.env.VITE_LLM_PROXY_TOKEN
 const LLM_TIMEOUT_MS = 30_000
 const MARGEN_CUADRE = 1 // pesos; mismo criterio que el parser (reconcile.ts)
 
 /**
- * Hay ruta LLM disponible si el build trae el token del proxy. La URL siempre
- * tiene un valor (por defecto '/api/extract'), así que basta con el token: sin
- * él el endpoint responde 401 y no tendría sentido intentar la ruta LLM.
+ * Hay ruta LLM disponible si hay una sesión iniciada (token vigente). Antes
+ * dependía de un token compartido incrustado en el build; ahora depende de que
+ * la usuaria haya iniciado sesión con la contraseña (ver src/auth/authToken.ts).
  */
 export function llmDisponible(): boolean {
-  return Boolean(PROXY_TOKEN)
+  return isTokenValid()
 }
 
 /** Campos crudos tal cual los devuelve el proxy (cualquiera puede ser null). */
@@ -146,8 +146,9 @@ function construirResultado(campos: CamposLLM): { data: ExtractedData; status: R
 export async function extraerConLLM(
   blob: Blob,
 ): Promise<{ data: ExtractedData; status: ReceiptStatus; raw: string }> {
-  if (!PROXY_TOKEN) {
-    throw new Error('Ruta LLM no configurada (falta VITE_LLM_PROXY_TOKEN)')
+  const token = getToken()
+  if (!token || !isTokenValid()) {
+    throw new Error('Ruta LLM no disponible (sesión no iniciada o expirada)')
   }
 
   const imageBase64 = await blobABase64(blob)
@@ -156,7 +157,7 @@ export async function extraerConLLM(
   const resp = await withTimeout(
     fetch(PROXY_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${PROXY_TOKEN}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ imageBase64, mimeType }),
     }),
     LLM_TIMEOUT_MS,

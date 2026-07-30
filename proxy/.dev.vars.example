@@ -1,10 +1,14 @@
 # Copia a `.dev.vars` (gitignored) para `wrangler dev` local.
-# En producción estos NO van aquí: se cargan con `wrangler secret put GEMINI_API_KEY`
-# y `wrangler secret put APP_SHARED_TOKEN`.
+# En producción estos NO van aquí: se cargan con `wrangler secret put GEMINI_API_KEY`,
+# `wrangler secret put APP_PASSWORD` y `wrangler secret put APP_AUTH_SECRET`.
 
 # Clave de la API de Gemini (Google AI Studio -> Get API key). ES EL SECRETO REAL.
 GEMINI_API_KEY=
 
-# Token compartido que exige el endpoint. Inventa uno largo y aleatorio; debe
-# coincidir con VITE_LLM_PROXY_TOKEN en el .env del cliente.
-APP_SHARED_TOKEN= 
+# Contraseña compartida que /login exige para dejar entrar a la app.
+APP_PASSWORD=
+
+# String aleatorio largo (ej. `openssl rand -hex 32`) usado para firmar el
+# token de sesión (HMAC-SHA256). No es la contraseña; rotarlo invalida todos
+# los tokens ya emitidos sin tener que cambiar APP_PASSWORD.
+APP_AUTH_SECRET=

@@ -20,18 +20,20 @@ cd proxy
 npm install
 
 # 1. Local (opcional): copia .dev.vars.example a .dev.vars y rellena
-#    GEMINI_API_KEY y APP_SHARED_TOKEN, luego:
+#    GEMINI_API_KEY, APP_PASSWORD y APP_AUTH_SECRET, luego:
 npm run dev            # levanta el Worker en http://localhost:8787
 
 # 2. Producción:
 npx wrangler login
 npx wrangler secret put GEMINI_API_KEY     # pega tu clave de Gemini
-npx wrangler secret put APP_SHARED_TOKEN   # inventa un token largo aleatorio
+npx wrangler secret put APP_PASSWORD       # la contraseña compartida
+npx wrangler secret put APP_AUTH_SECRET    # string aleatorio (openssl rand -hex 32)
 npm run deploy
 # -> imprime la URL, ej. https://recibos-proxy.TU-USUARIO.workers.dev
 ```
 
-El endpoint es `POST <URL>/` (el Worker atiende cualquier ruta; la app usa la raíz).
+Dos endpoints: `POST <URL>/login` (valida la contraseña y emite el token de
+sesión) y `POST <URL>/` (extracción; cualquier ruta que no sea `/login`).
 
 ## Conectar la PWA
 
@@ -39,17 +41,24 @@ En la raíz del proyecto, copia `.env.example` a `.env` y pon:
 
 ```
 VITE_LLM_PROXY_URL=https://recibos-proxy.TU-USUARIO.workers.dev
-VITE_LLM_PROXY_TOKEN=<el mismo APP_SHARED_TOKEN de arriba>
 ```
 
-Reinicia `npm run dev` (Vite lee `.env` al arrancar).
+Reinicia `npm run dev` (Vite lee `.env` al arrancar). Ya no hace falta un
+token en el cliente: la pantalla de login pide la contraseña y guarda el
+token que devuelve `/login`.
 
 ## Probar con curl
 
 ```bash
+# 1. Login: obtiene el token de sesión
+TOKEN=$(curl -s -X POST https://recibos-proxy.TU-USUARIO.workers.dev/login \
+  -H "Content-Type: application/json" \
+  -d '{"password":"<APP_PASSWORD>"}' | jq -r .token)
+
+# 2. Extract: usa el token como Bearer
 IMG=$(base64 -w0 factura.jpg)
 curl -s -X POST https://recibos-proxy.TU-USUARIO.workers.dev \
-  -H "Authorization: Bearer <APP_SHARED_TOKEN>" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"imageBase64\":\"$IMG\",\"mimeType\":\"image/jpeg\"}" | jq
 # -> { "fields": { "razonSocial": "...", "nit": "...", "total": ..., ... } }
@@ -57,17 +66,22 @@ curl -s -X POST https://recibos-proxy.TU-USUARIO.workers.dev \
 
 ## Contrato
 
-- **Request:** `POST` con `Authorization: Bearer <APP_SHARED_TOKEN>` y body
+- **`POST /login`:** body `{ password: string }` → `{ token: string }` (200) o
+  401 si la contraseña es incorrecta. El token es autoverificable (firma HMAC
+  + expiración a 90 días); el servidor no guarda sesiones.
+- **`POST /` (extract):** `Authorization: Bearer <token>` + body
   `{ imageBase64: string, mimeType: string }`.
 - **Response 200:** `{ fields: { razonSocial, nit, numero, fecha, concepto,
   valorBase, porcentajeIva, ivaMonto, total, formaPago } }` (cualquier campo
   puede ser `null`).
-- **Errores:** 401 (token), 400 (body), 502 (Gemini falló). El cliente cae al
-  pipeline de Tesseract ante cualquier error.
+- **Errores:** 401 (token ausente/inválido/expirado, o contraseña
+  incorrecta en `/login`), 400 (body), 502 (Gemini falló). El cliente cae al
+  pipeline de Tesseract ante cualquier error en `/` (extract).
 
 ## Seguridad / cuota
 
 Todos los usuarios comparten esta única clave = una sola cuota del free tier
-(~1,500 solicitudes/día). El `APP_SHARED_TOKEN` evita que un extraño con la URL
-la agote. Para uso personal es suficiente; si distribuyes la app a mucha gente,
-endurece con auth por usuario o rate-limit por IP.
+(~1,500 solicitudes/día). El token de sesión (emitido solo tras la contraseña
+correcta) evita que un extraño con la URL la agote. Para uso personal es
+suficiente; si distribuyes la app a mucha gente, endurece con auth por usuario
+o rate-limit por IP.
