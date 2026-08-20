@@ -17,18 +17,18 @@ offline de Tesseract.
 
 ```bash
 cd proxy
-npm install
+pnpm install
 
 # 1. Local (opcional): copia .dev.vars.example a .dev.vars y rellena
 #    GEMINI_API_KEY, APP_PASSWORD y APP_AUTH_SECRET, luego:
-npm run dev            # levanta el Worker en http://localhost:8787
+pnpm run dev            # levanta el Worker en http://localhost:8787
 
 # 2. Producción:
-npx wrangler login
-npx wrangler secret put GEMINI_API_KEY     # pega tu clave de Gemini
-npx wrangler secret put APP_PASSWORD       # la contraseña compartida
-npx wrangler secret put APP_AUTH_SECRET    # string aleatorio (openssl rand -hex 32)
-npm run deploy
+pnpm exec wrangler login
+pnpm exec wrangler secret put GEMINI_API_KEY     # pega tu clave de Gemini
+pnpm exec wrangler secret put APP_PASSWORD       # la contraseña compartida
+pnpm exec wrangler secret put APP_AUTH_SECRET    # string aleatorio (openssl rand -hex 32)
+pnpm run deploy
 # -> imprime la URL, ej. https://recibos-proxy.TU-USUARIO.workers.dev
 ```
 
@@ -43,7 +43,7 @@ En la raíz del proyecto, copia `.env.example` a `.env` y pon:
 VITE_LLM_PROXY_URL=https://recibos-proxy.TU-USUARIO.workers.dev
 ```
 
-Reinicia `npm run dev` (Vite lee `.env` al arrancar). Ya no hace falta un
+Reinicia `pnpm run dev` (Vite lee `.env` al arrancar). Ya no hace falta un
 token en el cliente: la pantalla de login pide la contraseña y guarda el
 token que devuelve `/login`.
 
