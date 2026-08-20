@@ -9,7 +9,7 @@ navegador, con IndexedDB (Dexie) como almacenamiento local.
 - Copiar tu plantilla a `public/templates/plantilla_facturas_compra.xlsx`
   (ver `public/templates/README.md`). Sin ella, `excel/export.ts` no tiene
   nada que cargar.
-- Correr `npm run setup:ocr` una vez después de `npm install` (ver
+- Correr `pnpm run setup:ocr` una vez después de `pnpm install` (ver
   `scripts/setup-ocr-assets.mjs`): copia/descarga a `public/tesseract/` los
   assets que necesita tesseract.js (worker, core WASM, modelo de idioma
   'spa') para que el OCR funcione sin red. Requiere internet la primera vez
@@ -19,19 +19,19 @@ navegador, con IndexedDB (Dexie) como almacenamiento local.
 ## Desarrollo
 
 ```bash
-npm install
-npm run setup:ocr
-npm run dev
+pnpm install
+pnpm run setup:ocr
+pnpm run dev
 ```
 
 ## Comandos
 
-- `npm run dev` — servidor de desarrollo con HMR.
-- `npm run build` — typecheck (`tsc -b`) + build de producción con el service worker de la PWA.
-- `npm run preview` — sirve el build de `dist/` localmente, tal cual quedaría en producción.
-- `npm test` — pruebas unitarias (Vitest). Cubren `utils/dv.ts`, `utils/nit.ts` y `parser/reconcile.ts`.
-- `npm run lint` — Oxlint.
-- `npm run setup:ocr` — descarga/copia los assets de OCR a `public/tesseract/` (ver arriba).
+- `pnpm run dev` — servidor de desarrollo con HMR.
+- `pnpm run build` — typecheck (`tsc -b`) + build de producción con el service worker de la PWA.
+- `pnpm run preview` — sirve el build de `dist/` localmente, tal cual quedaría en producción.
+- `pnpm test` — pruebas unitarias (Vitest). Cubren `utils/dv.ts`, `utils/nit.ts` y `parser/reconcile.ts`.
+- `pnpm run lint` — Oxlint.
+- `pnpm run setup:ocr` — descarga/copia los assets de OCR a `public/tesseract/` (ver arriba).
 
 ## Estado del proyecto
 
@@ -48,7 +48,7 @@ después: `excel/export.ts`, y el detalle de las páginas `Review`/`Export`
 
 ## Verificar que funciona offline
 
-1. `npm run build && npm run preview`.
+1. `pnpm run build && pnpm run preview`.
 2. Abrir la URL que imprime `preview` en Chrome/Edge.
 3. DevTools → pestaña Application → Service Workers: confirmar que hay uno
    activado ("activated and is running") para ese origen.
