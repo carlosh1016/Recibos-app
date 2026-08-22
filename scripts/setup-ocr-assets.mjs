@@ -2,25 +2,25 @@
 // (worker script, los tres builds del core WASM, y el modelo de idioma
 // 'spa'), y los descarga/copia desde donde realmente viven:
 //   - worker.min.js y los tesseract-core-*.wasm(.js) ya están en
-//     node_modules tras `npm install` (son parte de tesseract.js y
+//     node_modules tras `pnpm install` (son parte de tesseract.js y
 //     tesseract.js-core) — no hace falta red para esa parte.
 //   - spa.traineddata.gz NO es un paquete npm: tesseract.js lo descarga de
 //     un CDN en runtime. Este script lo baja una vez a public/ para que
 //     quede empaquetado con la app y el OCR funcione offline desde la
 //     primera instalación, sin depender de ese CDN.
 //
-// Corre automáticamente como `postinstall` tras `npm install` (ver
+// Corre automáticamente como `postinstall` tras `pnpm install` (ver
 // package.json), para que al clonar en una máquina nueva los assets se
 // generen solos y no haya que acordarse de un paso manual — ese olvido era
 // justo la causa del "NetworkError: worker.min.js failed to load". Igual se
-// puede correr a mano con `npm run setup:ocr`.
+// puede correr a mano con `pnpm run setup:ocr`.
 //
-// CLAVE: este script NUNCA debe hacer fallar el `npm install`. La copia de
+// CLAVE: este script NUNCA debe hacer fallar el `pnpm install`. La copia de
 // worker + core sale de node_modules (siempre presente después de instalar,
 // no necesita red). Solo la descarga del traineddata necesita internet, y si
 // falla (entorno sin salida a la red, CDN caído) se avisa con un warning
 // pero se sigue con exit 0: el resto de la app queda instalable, y basta
-// volver a correr `npm run setup:ocr` con conexión para completar el OCR.
+// volver a correr `pnpm run setup:ocr` con conexión para completar el OCR.
 import { existsSync, mkdirSync, copyFileSync } from 'node:fs'
 import { get } from 'node:https'
 import { createWriteStream } from 'node:fs'
@@ -59,7 +59,7 @@ async function main() {
   mkdirSync(OUT_LANG, { recursive: true })
 
   if (!existsSync(WORKER_SRC)) {
-    throw new Error(`No se encontró ${WORKER_SRC}. Corre \`npm install\` primero.`)
+    throw new Error(`No se encontró ${WORKER_SRC}. Corre \`pnpm install\` primero.`)
   }
   copyFileSync(WORKER_SRC, `${OUT_DIR}/worker.min.js`)
   console.log('worker.min.js copiado')
@@ -68,7 +68,7 @@ async function main() {
     for (const ext of ['.wasm.js', '.wasm']) {
       const origen = `${CORE_DIR}/${variante}${ext}`
       if (!existsSync(origen)) {
-        throw new Error(`No se encontró ${origen}. Corre \`npm install\` primero.`)
+        throw new Error(`No se encontró ${origen}. Corre \`pnpm install\` primero.`)
       }
       copyFileSync(origen, `${OUT_CORE}/${variante}${ext}`)
     }
@@ -81,7 +81,7 @@ async function main() {
   } else {
     // La descarga es el ÚNICO paso que necesita red. Si falla, no se aborta
     // todo (ver el comentario de cabecera): se avisa y se sigue, dejando el
-    // resto de los assets ya copiados. `npm run setup:ocr` con internet
+    // resto de los assets ya copiados. `pnpm run setup:ocr` con internet
     // completa lo que falte.
     console.log(`descargando ${LANG_URL} ...`)
     try {
@@ -91,7 +91,7 @@ async function main() {
       console.warn(
         `\n[setup:ocr] ADVERTENCIA: no se pudo descargar el modelo de idioma 'spa' ` +
           `(${err instanceof Error ? err.message : err}).\n` +
-          `El OCR no funcionará hasta que corras \`npm run setup:ocr\` con conexión a internet.`,
+          `El OCR no funcionará hasta que corras \`pnpm run setup:ocr\` con conexión a internet.`,
       )
       return
     }

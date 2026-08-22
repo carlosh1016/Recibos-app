@@ -13,7 +13,7 @@ export default defineConfig({
       // interceptar a mano, todo el procesamiento ya es local.
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
-      // Sin esto, `npm run dev` no genera manifest ni service worker en
+      // Sin esto, `pnpm run dev` no genera manifest ni service worker en
       // absoluto (vite-plugin-pwa solo actúa en build por defecto). Si se
       // prueba la instalabilidad de la PWA en el celular apuntando al
       // servidor de dev (`vite --host`), el navegador no encuentra ningún
