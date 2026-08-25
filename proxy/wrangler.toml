@@ -6,9 +6,9 @@ compatibility_date = "2024-11-01"
 # APP_AUTH_SECRET) se cargan aparte con `wrangler secret put ...` — NO van
 # aquí ni en el repo.
 [vars]
-# gemini-flash-latest = alias estable al flash actual (hoy resuelve a
-# gemini-3.6-flash). gemini-2.5-flash quedó bloqueado para cuentas nuevas.
-GEMINI_MODEL = "gemini-flash-latest"
+# Fijamos la versión concreta (en vez del alias "gemini-flash-latest") para
+# evitar los 503 de sobrecarga que da el alias en horas pico.
+GEMINI_MODEL = "gemini-3.6-flash"
 # Restringe el origen si quieres (ej. "https://tu-app.pages.dev"); '*' está bien
 # porque la protección real es el token compartido.
 ALLOWED_ORIGIN = "*"

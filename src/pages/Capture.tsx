@@ -29,15 +29,6 @@ const RANGO_PREPROCESO: [number, number] = [0, 30]
 const RANGO_OCR: [number, number] = [30, 90]
 const RANGO_PARSEO: [number, number] = [90, 100]
 
-// Recorte de la tirilla dentro del cuadro de la cámara, como FRACCIONES del
-// frame (no píxeles): un rectángulo angosto y alto, centrado, con la forma de
-// una tirilla térmica. TODO lo que quede fuera de este rectángulo (el teclado,
-// la mesa, el fondo) se descarta ANTES del OCR — esa es la causa raíz del OCR
-// ruidoso: Tesseract veía la tirilla ocupando media imagen y perdía densidad
-// de texto. El overlay que ve el usuario usa EXACTAMENTE estas mismas
-// fracciones, así que "lo que encuadra es lo que se recorta".
-const RECORTE = { x: 0.15, y: 0.05, w: 0.7, h: 0.9 } as const
-
 function mapearProgreso(fraccion: number, [desde, hasta]: [number, number]): number {
   return desde + fraccion * (hasta - desde)
 }
@@ -87,28 +78,20 @@ function canvasABlob(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 /**
- * Recorta el frame actual del <video> al rectángulo de la tirilla (RECORTE) y
- * devuelve un canvas SOLO con esa región, a resolución nativa de la cámara.
- * Como el <video> se muestra con su aspecto natural (w-full h-auto, sin
- * object-fit que recorte), las fracciones del overlay mapean 1:1 a las
- * fracciones del frame intrínseco — lo que se ve encuadrado es lo que se corta.
+ * Captura el frame actual del <video> completo, sin recorte, a resolución
+ * nativa de la cámara.
  */
-function recortarFrameDeVideo(video: HTMLVideoElement): HTMLCanvasElement {
+function capturarFrameDeVideo(video: HTMLVideoElement): HTMLCanvasElement {
   const vw = video.videoWidth
   const vh = video.videoHeight
   if (!vw || !vh) throw new Error('La cámara todavía no entrega imagen; espera un momento e intenta de nuevo')
 
-  const sx = Math.round(RECORTE.x * vw)
-  const sy = Math.round(RECORTE.y * vh)
-  const sw = Math.round(RECORTE.w * vw)
-  const sh = Math.round(RECORTE.h * vh)
-
   const canvas = document.createElement('canvas')
-  canvas.width = sw
-  canvas.height = sh
+  canvas.width = vw
+  canvas.height = vh
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('No se pudo obtener el contexto 2D para recortar la foto')
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh)
+  if (!ctx) throw new Error('No se pudo obtener el contexto 2D para capturar la foto')
+  ctx.drawImage(video, 0, 0, vw, vh)
   return canvas
 }
 
@@ -308,23 +291,23 @@ export function Capture() {
     [sessionId],
   )
 
-  // Captura desde la cámara EN VIVO: toma el frame actual, lo recorta al
-  // recuadro de la tirilla y lo manda al pipeline.
+  // Captura desde la cámara EN VIVO: toma el frame actual completo (sin
+  // recorte) y lo manda al pipeline.
   async function capturarDesdeCamara() {
     const video = videoRef.current
     if (!video || procesando) return
     try {
       console.log('[capture] capturando frame de la cámara en vivo')
-      const canvasRecortado = recortarFrameDeVideo(video)
+      const canvas = capturarFrameDeVideo(video)
       // Congelar el preview AL INSTANTE: el frame ya se tomó (drawImage de
       // arriba es síncrono), así que se pausa el <video> para que quede
       // mostrando la foto capturada. Feedback claro de "ya se tomó, puedes
       // moverte" mientras corre el OCR. Se reanuda en procesarImagen() al
       // terminar (éxito o error), para reencuadrar el siguiente recibo.
       video.pause()
-      const blob = await canvasABlob(canvasRecortado)
-      console.log('[capture] frame recortado:', canvasRecortado.width, 'x', canvasRecortado.height, blob.size, 'bytes')
-      await procesarImagen(canvasRecortado, blob)
+      const blob = await canvasABlob(canvas)
+      console.log('[capture] frame capturado:', canvas.width, 'x', canvas.height, blob.size, 'bytes')
+      await procesarImagen(canvas, blob)
     } catch (err) {
       console.error('[capture] error capturando frame de la cámara:', err)
       setEstado('error')
@@ -350,7 +333,7 @@ export function Capture() {
   }
 
   const mensajeEstado: Record<Estado, string> = {
-    idle: 'Encuadra la tirilla dentro del recuadro y toca "Capturar".',
+    idle: 'Encuadra la factura y toca "Capturar".',
     llm: 'Foto tomada, leyendo la factura con IA… ya puedes moverte.',
     preprocesando: 'Foto tomada, procesando (mejorando la imagen)… ya puedes moverte.',
     ocr: 'Foto tomada, reconociendo texto (OCR)… ya puedes moverte.',
@@ -362,7 +345,7 @@ export function Capture() {
   return (
     <Screen
       titulo="Capturar facturas"
-      subtitulo={nombreSesion ?? 'Encuadra la tirilla y toca Capturar'}
+      subtitulo={nombreSesion ?? 'Encuadra la factura y toca Capturar'}
       volverA="/"
       accion={
         <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
@@ -372,10 +355,8 @@ export function Capture() {
     >
       {estadoCamara !== 'no-disponible' ? (
         <>
-          {/* Cámara EN VIVO: el <video> se muestra a su aspecto natural (sin
-              object-fit que recorte), así el recuadro guía en % mapea 1:1 al
-              frame que se recorta. El recuadro NO es decorativo: delimita
-              exactamente la región que se le pasa al OCR. */}
+          {/* Cámara EN VIVO, a pantalla completa dentro de la tarjeta: se
+              captura la foto entera, sin recorte ni recuadro guía. */}
           <div className="relative overflow-hidden rounded-xl bg-black">
             <video
               ref={videoRef}
@@ -385,32 +366,11 @@ export function Capture() {
               className="block h-auto w-full"
             />
 
-            {/* Overlay del recorte: oscurece lo de afuera y marca la tirilla. */}
-            <div
-              className="pointer-events-none absolute border-2 border-dashed border-brand-300"
-              style={{
-                left: `${RECORTE.x * 100}%`,
-                top: `${RECORTE.y * 100}%`,
-                width: `${RECORTE.w * 100}%`,
-                height: `${RECORTE.h * 100}%`,
-                boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)',
-              }}
-            >
-              <span className="absolute left-1 top-1 h-5 w-5 border-l-2 border-t-2 border-brand-200" />
-              <span className="absolute right-1 top-1 h-5 w-5 border-r-2 border-t-2 border-brand-200" />
-              <span className="absolute bottom-1 left-1 h-5 w-5 border-b-2 border-l-2 border-brand-200" />
-              <span className="absolute bottom-1 right-1 h-5 w-5 border-b-2 border-r-2 border-brand-200" />
-            </div>
-
             {estadoCamara === 'iniciando' && (
               <p className="absolute inset-0 flex items-center justify-center text-sm text-white/80">
                 Abriendo la cámara…
               </p>
             )}
-
-            <p className="pointer-events-none absolute inset-x-0 bottom-2 text-center text-xs font-medium text-white/90">
-              Centra la tirilla dentro del recuadro
-            </p>
           </div>
 
           <Button
