@@ -1,6 +1,6 @@
 // Función serverless de Vercel (Edge) que valida la contraseña compartida y
-// emite el token que api/extract.ts exige. Es el ESPEJO de la ruta /login en
-// proxy/src/worker.ts (versión Cloudflare para dev local con `wrangler dev`).
+// emite el token que api/extract.ts exige. En dev local la sirve el propio
+// `pnpm run dev` (ver el plugin apiLocal en vite.config.ts).
 //
 // No hay base de datos ni tabla de sesiones: el token se verifica a sí mismo
 // (ver api/_lib/authToken.ts). La contraseña y el secreto de firma viven como

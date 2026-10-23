@@ -96,19 +96,28 @@ export function Review() {
     void cargar()
   }, [sessionId])
 
-  // Al cambiar de recibo: cargar sus datos al formulario y crear el object URL
-  // de la foto (revocando el anterior para no filtrar memoria).
-  useEffect(() => {
-    if (!receiptActual) {
-      setForm(null)
-      return
-    }
-    setForm(receiptAForm(receiptActual.data))
+  // Id del recibo cuya foto COMPLETA se está mostrando en vez del recorte (ver
+  // Receipt.fotoOriginal). Guardar el id, y no un booleano, hace que al pasar a
+  // otro recibo se vuelva solo al recorte, sin tener que resetearlo a mano.
+  const [fotoCompletaDe, setFotoCompletaDe] = useState<number | null>(null)
+  const mostrandoCompleta =
+    receiptActual?.fotoOriginal !== undefined && fotoCompletaDe === receiptActual.id
 
-    const url = URL.createObjectURL(receiptActual.imageBlob)
+  // Al cambiar de recibo: cargar sus datos al formulario.
+  useEffect(() => {
+    setForm(receiptActual ? receiptAForm(receiptActual.data) : null)
+  }, [receiptActual])
+
+  // Object URL de la foto (recorte o completa), revocando el anterior para no
+  // filtrar memoria. Va aparte del efecto del formulario: alternar recorte /
+  // foto completa NO debe borrar lo que la usuaria ya editó.
+  useEffect(() => {
+    if (!receiptActual) return
+    const foto = mostrandoCompleta && receiptActual.fotoOriginal ? receiptActual.fotoOriginal : receiptActual.imageBlob
+    const url = URL.createObjectURL(foto)
     setPhotoUrl(url)
     return () => URL.revokeObjectURL(url)
-  }, [receiptActual])
+  }, [receiptActual, mostrandoCompleta])
 
   const setCampo = useCallback(<K extends keyof FormState>(campo: K, valor: FormState[K]) => {
     setForm((f) => (f ? { ...f, [campo]: valor } : f))
@@ -274,15 +283,28 @@ export function Review() {
       {receiptActual && form && (
         <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,340px)_1fr]">
           {/* Foto */}
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-            {photoUrl ? (
-              <img
-                src={photoUrl}
-                alt={`Factura ${idx + 1}`}
-                className="max-h-[60vh] w-full object-contain md:max-h-[70vh]"
-              />
-            ) : (
-              <p className="p-8 text-center text-sm text-slate-400">Cargando foto…</p>
+          <div>
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+              {photoUrl ? (
+                <img
+                  src={photoUrl}
+                  alt={`Factura ${idx + 1}`}
+                  className="max-h-[60vh] w-full object-contain md:max-h-[70vh]"
+                />
+              ) : (
+                <p className="p-8 text-center text-sm text-slate-400">Cargando foto…</p>
+              )}
+            </div>
+            {/* Solo si la foto es un recorte automático: por si cortó el NIT o
+                el total, o para ver de cuál de las tirillas de la foto salió. */}
+            {receiptActual.fotoOriginal && (
+              <button
+                type="button"
+                onClick={() => setFotoCompletaDe(mostrandoCompleta ? null : (receiptActual.id ?? null))}
+                className="mt-1 min-h-[44px] w-full rounded-lg text-xs font-medium text-brand-700 hover:bg-brand-50"
+              >
+                {mostrandoCompleta ? 'Ver solo esta factura' : 'Ver foto completa'}
+              </button>
             )}
           </div>
 

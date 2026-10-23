@@ -18,19 +18,16 @@ dev-dist
 # reproducibles desde node_modules + una descarga, no código.
 public/tesseract/
 
-# Variables de entorno locales del cliente (la .env.example SÍ se versiona).
-# No contienen secretos fuertes, pero se ignoran por higiene.
+# Variables de entorno locales: .env.local trae la clave REAL de OpenRouter
+# para `pnpm run dev`. NUNCA versionar (la .env.example SÍ se versiona).
 .env
 .env.*
 !.env.example
 
-# Secretos locales del proxy: .dev.vars trae la clave REAL de Gemini para
-# `wrangler dev`. NUNCA versionar (ver proxy/.dev.vars.example).
+# Restos del antiguo proxy de Cloudflare (proxy/, ya sin uso): .dev.vars puede
+# traer la clave REAL de Gemini. Se mantienen ignorados hasta borrar la carpeta.
 proxy/.dev.vars
 proxy/node_modules
-
-# Caché y bundles temporales que genera `wrangler dev` al correr el proxy en
-# local. Son artefactos de build, no fuente.
 proxy/.wrangler
 
 # Editor directories and files

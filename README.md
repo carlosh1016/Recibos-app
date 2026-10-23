@@ -1,8 +1,24 @@
 # Recibos App
 
-PWA 100% offline para procesar fotos de facturas colombianas (OCR con
-tesseract.js) y exportarlas a Excel (ExcelJS). Sin backend: todo corre en el
-navegador, con IndexedDB (Dexie) como almacenamiento local.
+PWA para procesar fotos de facturas colombianas y exportarlas a Excel
+(ExcelJS). Con internet, la foto se lee con un modelo de visión vía
+OpenRouter (por defecto `google/gemini-2.5-flash-lite`) a través de las
+funciones serverless de `api/` en Vercel; sin internet, cae al OCR local
+(tesseract.js). Los datos viven solo en el dispositivo (IndexedDB vía Dexie).
+
+## Variables de entorno (servidor)
+
+Las funciones de `api/` necesitan estas variables, sin prefijo `VITE_` (nunca
+llegan al navegador). En producción se configuran en el proyecto de Vercel; en
+local, en `.env.local` (copia `.env.example`):
+
+- `OPENROUTER_API_KEY` — clave de https://openrouter.ai/keys.
+- `OPENROUTER_MODEL` — opcional; cambia el modelo sin tocar código.
+- `APP_PASSWORD` — contraseña compartida del login.
+- `APP_AUTH_SECRET` — secreto para firmar el token (`openssl rand -hex 32`).
+
+`pnpm run dev` sirve también `/api/login` y `/api/extract` (plugin `apiLocal`
+en `vite.config.ts`), así que no hace falta `vercel dev` ni otro servidor.
 
 ## Requisitos
 

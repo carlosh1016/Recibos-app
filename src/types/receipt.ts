@@ -37,6 +37,15 @@ export interface Receipt {
   // directamente en IndexedDB sin que los conviertas a base64 a mano.
   imageBlob: Blob
 
+  // Foto COMPLETA tal cual se tomó, solo cuando `imageBlob` es un recorte
+  // automático (la IA devolvió dónde está la factura dentro de la foto, ver
+  // extract/caja.ts). Se conserva porque el recorte puede salir corrido y
+  // cortar justo el NIT o el total: en Review se puede volver a la foto
+  // completa para verificar. Si no hubo recorte, no existe (imageBlob ya es
+  // la foto completa). Con varias facturas en una foto, cada Receipt guarda su
+  // propia copia de la misma foto completa.
+  fotoOriginal?: Blob
+
   // Texto crudo tal cual lo devolvió tesseract.js, sin procesar. Se conserva
   // siempre (incluso si el parser interpreta mal algo) para poder reprocesar o
   // depurar manualmente en Review sin repetir el OCR.

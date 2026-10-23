@@ -1,41 +1,71 @@
-// Función serverless de Vercel (Edge) entre la PWA y la API de Gemini.
+// Función serverless de Vercel (Edge) entre la PWA y OpenRouter, que a su vez
+// enruta al modelo de visión configurado (por defecto Gemini 2.5 Flash Lite).
+// En producción la PWA la llama en el MISMO dominio (/api/extract), así que no
+// hay CORS ni URL externa que configurar. En dev local la sirve el propio
+// `pnpm run dev` (ver el plugin apiLocal en vite.config.ts).
 //
-// Es el ESPEJO de proxy/src/worker.ts (la versión Cloudflare que se usa en
-// desarrollo local con `wrangler dev`). Mantener el PROMPT y el RESPONSE_SCHEMA
-// en sincronía entre ambos. En producción la PWA la llama en el MISMO dominio
-// (/api/extract), así que no hay CORS ni URL externa que configurar.
-//
-// La clave de Gemini vive como variable de entorno de Vercel
-// (GEMINI_API_KEY, SIN el prefijo VITE_ → nunca se empaqueta en el navegador).
-// El endpoint exige un token de sesión (emitido por api/login.ts tras validar
-// la contraseña compartida — ver api/_lib/authToken.ts) como Bearer token.
+// La clave de OpenRouter vive como variable de entorno de Vercel
+// (OPENROUTER_API_KEY, SIN el prefijo VITE_ → nunca se empaqueta en el
+// navegador). El endpoint exige un token de sesión (emitido por api/login.ts
+// tras validar la contraseña compartida — ver api/_lib/authToken.ts) como
+// Bearer token.
 
 import { verifyToken } from './_lib/authToken'
 
 export const config = { runtime: 'edge' }
 
-// Campos que le pedimos a Gemini. Debe mantenerse en sincronía (a mano) con
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+// Se elige con OPENROUTER_MODEL en Vercel para poder cambiar de modelo sin
+// tocar código. Default: el más barato de la familia Gemini con buena lectura
+// de imágenes (ver la comparación de modelos de OpenRouter).
+const MODELO_POR_DEFECTO = 'google/gemini-2.5-flash-lite'
+// Respaldo automático de OpenRouter (parámetro `models`): si el principal
+// responde 429 o está caído, lo intenta con este en la MISMA petición. Pasa de
+// verdad: el pool compartido de Google AI Studio para flash-lite devolvió 429
+// en las primeras pruebas, y sin respaldo esa foto caía al OCR local. Este se
+// sirve además desde Vertex (otro pool), y es de la misma familia (mismo
+// formato de box_2d). Cuesta ~3x más, pero solo se paga cuando se usa.
+const MODELO_RESPALDO = 'google/gemini-3.1-flash-lite'
+
+// Campos que le pedimos al modelo. Debe mantenerse en sincronía (a mano) con
 // ExtractedData del cliente; el cliente valida/sanea igual, así que esto es la
-// "forma esperada", no un contrato de confianza.
-const RESPONSE_SCHEMA = {
-  type: 'OBJECT',
+// "forma esperada", no un contrato de confianza. Es JSON Schema estándar en
+// modo `strict` (formato de OpenAI que OpenRouter traduce a cada proveedor):
+// strict exige listar TODOS los campos en `required` y cerrar el objeto con
+// additionalProperties: false; "no aparece" se expresa con null, no omitiendo.
+const CAMPOS_TEXTO = ['razonSocial', 'nit', 'numero', 'fecha', 'concepto', 'formaPago'] as const
+const CAMPOS_NUMERO = ['valorBase', 'porcentajeIva', 'ivaMonto', 'total'] as const
+
+// Una foto puede traer VARIAS facturas, así que la respuesta es una lista. Cada
+// factura trae además `box_2d`: dónde está dentro de la foto, en la convención
+// nativa de Gemini (ver src/extract/caja.ts), para recortarla en el cliente.
+const FACTURA_SCHEMA = {
+  type: 'object',
   properties: {
-    razonSocial: { type: 'STRING', nullable: true },
-    nit: { type: 'STRING', nullable: true },
-    numero: { type: 'STRING', nullable: true },
-    fecha: { type: 'STRING', nullable: true },
-    concepto: { type: 'STRING', nullable: true },
-    valorBase: { type: 'NUMBER', nullable: true },
-    porcentajeIva: { type: 'NUMBER', nullable: true },
-    ivaMonto: { type: 'NUMBER', nullable: true },
-    total: { type: 'NUMBER', nullable: true },
-    formaPago: { type: 'STRING', nullable: true },
+    ...Object.fromEntries(CAMPOS_TEXTO.map((c) => [c, { type: ['string', 'null'] }])),
+    ...Object.fromEntries(CAMPOS_NUMERO.map((c) => [c, { type: ['number', 'null'] }])),
+    box_2d: { type: 'array', items: { type: 'number' } },
   },
-} as const
+  required: [...CAMPOS_TEXTO, ...CAMPOS_NUMERO, 'box_2d'],
+  additionalProperties: false,
+}
+
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: { facturas: { type: 'array', items: FACTURA_SCHEMA } },
+  required: ['facturas'],
+  additionalProperties: false,
+}
 
 const PROMPT = `Eres un extractor de datos de facturas electrónicas colombianas (tirillas/POS).
-Te doy la FOTO de una factura. Devuelve SOLO un JSON con estos campos (usa null si no aparece o no estás seguro):
+Te doy una FOTO que puede contener UNA o VARIAS facturas (tirillas puestas una al lado de la otra).
+Devuelve SOLO un JSON { "facturas": [...] } con un objeto POR CADA factura que veas, en orden de izquierda a derecha y de arriba a abajo.
 
+MUY IMPORTANTE con varias facturas: cada objeto lleva SOLO los datos impresos en ESA tirilla. Nunca mezcles el NIT, el total ni ningún otro dato de una factura con otra. Si un dato de una tirilla no se lee, usa null en vez de tomarlo de otra.
+
+Campos de cada factura (usa null si no aparece o no estás seguro):
+
+- box_2d: recuadro de la tirilla COMPLETA dentro de la foto, como [ymin, xmin, ymax, xmax] normalizado de 0 a 1000. Debe cubrir todo el papel de esa factura, de borde a borde.
 - razonSocial: nombre del EMISOR/vendedor (no el cliente ni "consumidor final").
 - nit: NIT del emisor, SOLO dígitos, sin puntos ni guion ni el dígito de verificación.
 - numero: número de la factura (ej. "CFLA 1915").
@@ -95,71 +125,100 @@ export default async function handler(request: Request): Promise<Response> {
     return json({ error: 'Faltan imageBase64 y/o mimeType' }, 400)
   }
 
-  const apiKey = process.env.GEMINI_API_KEY
+  const apiKey = process.env.OPENROUTER_API_KEY
   if (!apiKey) {
-    return json({ error: 'Falta GEMINI_API_KEY en el servidor' }, 500)
+    return json({ error: 'Falta OPENROUTER_API_KEY en el servidor' }, 500)
   }
-  const model = process.env.GEMINI_MODEL || 'gemini-flash-latest'
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
+  const model = process.env.OPENROUTER_MODEL || MODELO_POR_DEFECTO
 
-  let geminiResp: Response
+  let llmResp: Response
   try {
-    geminiResp = await fetch(url, {
+    llmResp = await fetch(OPENROUTER_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        // Opcional: nombre con el que la app aparece en el panel de OpenRouter.
+        'X-Title': 'Recibos App',
+      },
       body: JSON.stringify({
-        contents: [
+        models: model === MODELO_RESPALDO ? [model] : [model, MODELO_RESPALDO],
+        messages: [
           {
-            parts: [{ text: PROMPT }, { inline_data: { mime_type: mimeType, data: imageBase64 } }],
+            role: 'user',
+            content: [
+              { type: 'text', text: PROMPT },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+            ],
           },
         ],
-        generationConfig: {
-          temperature: 0,
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
+        temperature: 0,
+        // Tope de salida: cada factura pesa ~250 tokens de JSON; 3000 alcanza
+        // para una foto con varias y solo evita que una respuesta desbocada
+        // se cobre entera.
+        max_tokens: 3000,
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'factura', strict: true, schema: RESPONSE_SCHEMA },
+        },
+        provider: {
+          // Solo proveedores que soporten response_format (si no, el modelo
+          // podría devolver texto libre en vez del JSON pedido).
+          require_parameters: true,
+          // Son facturas reales con NIT y montos: excluir proveedores que
+          // guarden los datos o los usen para entrenar.
+          data_collection: 'deny',
         },
       }),
     })
   } catch (err) {
-    return json({ error: `No se pudo contactar a Gemini: ${String(err)}` }, 502)
+    return json({ error: `No se pudo contactar a OpenRouter: ${String(err)}` }, 502)
   }
 
-  if (!geminiResp.ok) {
-    const detalle = await geminiResp.text().catch(() => '')
-    return json({ error: `Gemini respondió ${geminiResp.status}`, detalle }, 502)
+  if (!llmResp.ok) {
+    const detalle = await llmResp.text().catch(() => '')
+    return json({ error: `OpenRouter respondió ${llmResp.status}`, detalle: detalle.slice(0, 500) }, 502)
   }
 
-  let geminiJson: unknown
+  let llmJson: unknown
   try {
-    geminiJson = await geminiResp.json()
+    llmJson = await llmResp.json()
   } catch {
-    return json({ error: 'Respuesta de Gemini no era JSON' }, 502)
+    return json({ error: 'Respuesta de OpenRouter no era JSON' }, 502)
   }
 
-  const texto = extraerTextoDeGemini(geminiJson)
+  const texto = extraerTextoDeRespuesta(llmJson)
   if (texto === null) {
-    return json({ error: 'Gemini no devolvió contenido', respuesta: geminiJson }, 502)
+    return json({ error: 'El modelo no devolvió contenido' }, 502)
   }
 
-  let fields: unknown
+  let parseado: { facturas?: unknown }
   try {
-    fields = JSON.parse(texto)
+    parseado = JSON.parse(quitarCercoMarkdown(texto)) as { facturas?: unknown }
   } catch {
-    return json({ error: 'El contenido de Gemini no era JSON parseable', texto }, 502)
+    return json({ error: 'El contenido del modelo no era JSON parseable', texto: texto.slice(0, 500) }, 502)
+  }
+  if (!Array.isArray(parseado?.facturas)) {
+    return json({ error: 'El modelo no devolvió la lista "facturas"', texto: texto.slice(0, 500) }, 502)
   }
 
   // Se devuelven los campos crudos; el CLIENTE los valida, recomputa el DV y
   // decide el status (misma filosofía que el parser: nunca confiar a ciegas).
-  return json({ fields }, 200)
+  return json({ facturas: parseado.facturas }, 200)
 }
 
-/** Navega la estructura de respuesta de Gemini hasta el texto generado. */
-function extraerTextoDeGemini(resp: unknown): string | null {
-  const r = resp as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[]
-  }
-  const parts = r.candidates?.[0]?.content?.parts
-  if (!parts) return null
-  const texto = parts.map((p) => p.text ?? '').join('')
-  return texto || null
+/** Navega la respuesta (formato chat completions) hasta el texto generado. */
+function extraerTextoDeRespuesta(resp: unknown): string | null {
+  const r = resp as { choices?: { message?: { content?: string | null } }[] }
+  const texto = r.choices?.[0]?.message?.content
+  return typeof texto === 'string' && texto.trim() ? texto : null
+}
+
+/**
+ * Algunos modelos envuelven el JSON en un bloque ```json ... ``` aunque se les
+ * pida JSON puro. Se quita el cerco si viene; si no, el texto queda igual.
+ */
+function quitarCercoMarkdown(texto: string): string {
+  const m = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/.exec(texto)
+  return m ? m[1] : texto
 }

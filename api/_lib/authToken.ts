@@ -1,6 +1,5 @@
-// Núcleo criptográfico compartido por api/login.ts y api/extract.ts (y su
-// espejo proxy/src/authToken.ts, para el Worker de Cloudflare usado en dev
-// local). Un solo primitivo — HMAC-SHA256 vía Web Crypto — para dos usos:
+// Núcleo criptográfico compartido por api/login.ts y api/extract.ts. Un solo
+// primitivo — HMAC-SHA256 vía Web Crypto — para dos usos:
 // firmar/verificar el token de sesión y comparar la contraseña sin una
 // comparación de strings insegura ante ataques de temporización.
 //

@@ -8,12 +8,9 @@
 
 const CLAVE_TOKEN = 'recibos-auth-token'
 
-// Igual que geminiExtract.ts: sin VITE_LLM_PROXY_URL se usa la ruta del mismo
-// dominio (la función serverless de Vercel); con ella (dev local apuntando a
-// `wrangler dev`) se añade el path que el Worker despacha a /login.
-const LOGIN_URL = import.meta.env.VITE_LLM_PROXY_URL
-  ? `${import.meta.env.VITE_LLM_PROXY_URL}/login`
-  : '/api/login'
+// Mismo dominio siempre, igual que llmExtract.ts: en producción la sirve
+// Vercel y en dev local el plugin apiLocal de vite.config.ts.
+const LOGIN_URL = '/api/login'
 
 export function getToken(): string | null {
   return localStorage.getItem(CLAVE_TOKEN)
